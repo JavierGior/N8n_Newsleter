@@ -1,0 +1,107 @@
+import os
+import asyncio
+import aiohttp
+import csv
+import re
+from bs4 import BeautifulSoup
+from datetime import datetime
+
+# --- CONFIGURACIÓN ---
+OUTPUT_PATH = "./output"
+REPORT_NAME = f"auditoria_newsletter_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+# El criterio que usará el script para buscar en el texto
+KEYWORDS_RELEVANCIA = ["adecoagro", "adeco", "agro", "ia", "automatización"] 
+
+async def check_url_status(session, url):
+    """Verifica si la URL está viva, con bypass para sitios que bloquean bots."""
+    # Dominios que suelen dar falsos negativos
+    bypass_domains = ["t.co", "twitter.com", "x.com", "yahoo.com", "finance.yahoo"]
+    if any(domain in url.lower() for domain in bypass_domains):
+        return "REVISAR (Probable OK)"
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    }
+    try:
+        async with session.get(url, headers=headers, timeout=10, allow_redirects=True) as response:
+            return "SI" if response.status == 200 else f"NO (Error {response.status})"
+    except:
+        return "NO (Timeout/Caído)"
+
+def validar_consistencia(encabezado, url):
+    """Replica tu búsqueda manual: ¿el texto del reporte coincide con el link?"""
+    # Limpiamos el texto para comparar
+    texto_clean = encabezado.lower()
+    # Si el link contiene palabras clave del encabezado o viceversa
+    palabras_clave = [p for p in re.split(r'\W+', texto_clean) if len(p) > 3]
+    coincidencias = sum(1 for p in palabras_clave if p in url.lower())
+    
+    return "ALTA" if coincidencias > 0 or any(k in texto_clean for k in KEYWORDS_RELEVANCIA) else "BAJA"
+
+def extraer_datos_html(html_content):
+    soup = BeautifulSoup(html_content, 'html.parser')
+    items = []
+    # Buscamos todos los bloques que parecen noticias (ajustar si usás <li> o <div>)
+    for link in soup.find_all('a', href=True):
+        url = link['href']
+        if not url.startswith("http"): continue
+        
+        # Extraemos el texto del link y el contexto (el párrafo o título donde está)
+        texto_encabezado = link.get_text(strip=True)
+        contenedor = link.find_parent(['p', 'div', 'li', 'td'])
+        contexto_completo = contenedor.get_text(strip=True) if contenedor else texto_encabezado
+        
+        items.append({
+            "url": url,
+            "encabezado": texto_encabezado,
+            "contexto": contexto_completo
+        })
+    return items
+
+async def ejecutar_auditoria():
+    resultados = []
+    vistas = set()
+
+    async with aiohttp.ClientSession() as session:
+        archivos = [f for f in os.listdir(OUTPUT_PATH) if f.endswith(".html")]
+        
+        for archivo in archivos:
+            with open(os.path.join(OUTPUT_PATH, archivo), 'r', encoding='utf-8') as f:
+                noticias = extraer_datos_html(f.read())
+                
+                for n in noticias:
+                    if n['url'] in vistas: continue
+                    vistas.add(n['url'])
+                    
+                    # 1. ¿La URL funciona?
+                    estado_url = await check_url_status(session, n['url'])
+                    
+                    # 2. ¿Es relevante? (Busca tus keywords en el texto del reporte)
+                    es_relevante = "SI" if any(k in n['contexto'].lower() for k in KEYWORDS_RELEVANCIA) else "DUDOSO"
+                    
+                    # 3. ¿Coincide encabezado con vínculo?
+                    consistencia = validar_consistencia(n['encabezado'], n['url'])
+                    
+                    resultados.append({
+                        "Fecha_Procesado": datetime.now().date(),
+                        "Archivo": archivo,
+                        "Encabezado_Reporte": n['encabezado'][:100],
+                        "URL": n['url'],
+                        "URL_Viva": estado_url,
+                        "Relevante_Keyword": es_relevante,
+                        "Consistencia_Link": consistencia
+                    })
+
+    # Guardar CSV
+    if resultados:
+        with open(REPORT_NAME, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.DictWriter(f, fieldnames=resultados[0].keys())
+            writer.writeheader()
+            writer.writerows(resultados)
+        print(f"Auditoría terminada. Archivo generado: {REPORT_NAME}")
+    else:
+        print("No se encontraron noticias para auditar.")
+
+if __name__ == "__main__":
+    asyncio.run(ejecutar_auditoria())

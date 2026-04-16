@@ -1,0 +1,48 @@
+
+services:
+  postgres:
+    image: ankane/pgvector:latest  # Imagen de Postgres con vectores ya instalados
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+
+  n8n:
+    build: .  # Usa el Dockerfile local
+    restart: always
+    environment:
+      - N8N_HOST=${DOMAIN_NAME}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=America/Argentina/Buenos_Aires
+      # Credenciales DB para n8n (opcional, si quieres guardar workflows ahí)
+      # o para conectarte desde el nodo de Postgres
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_DATABASE=${DB_NAME}
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_USER=${DB_USER}
+      - DB_POSTGRESDB_PASSWORD=${DB_PASSWORD}
+      - NODES_EXCLUDE=[]
+      - N8N_RESTRICT_FILE_ACCESS_TO=/home/node/output
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=false
+    ports:
+      - "5678:5678"
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+      - ./python_scripts:/home/node/python_scripts
+      - ./output:/home/node/output
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+  n8n_data:

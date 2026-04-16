@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "skills": {
+    "create-github-action-workflow-specification": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "computedHash": "527e6c77d921d58a9d0059aa95d0d14b441d2166f9c20518263048a56ca8fbbb"
+    },
+    "n8n-code-javascript": {
+      "source": "czlonkowski/n8n-skills",
+      "sourceType": "github",
+      "computedHash": "7e3317c734cbcc861fef6a54ec0c254867b2d2bf6bea131b49611e438ccf88fb"
+    },
+    "n8n-code-python": {
+      "source": "czlonkowski/n8n-skills",
+      "sourceType": "github",
+      "computedHash": "921f3f5a74ac016b41b72bfa0a13d884e85309d2cfd9c4bcf7fc3eade70a0f08"
+    },
+    "n8n-expression-syntax": {
+      "source": "czlonkowski/n8n-skills",
+      "sourceType": "github",
+      "computedHash": "3e28711cdf2a53dae95f3b79b7f329304f68c7bb97c1778badf1f30ff6d897af"
+    },
+    "n8n-mcp-tools-expert": {
+      "source": "czlonkowski/n8n-skills",
+      "sourceType": "github",
+      "computedHash": "ca474280b0391a35135f77aee1dc63857c68a3a1c03fe2ac4909681485c303a3"
+    },
+    "n8n-node-configuration": {
+      "source": "czlonkowski/n8n-skills",
+      "sourceType": "github",
+      "computedHash": "153df341eeb695d7174f0427c5c64025ca8e098afa579c2557333d75b673e181"
+    },
+    "n8n-validation-expert": {
+      "source": "czlonkowski/n8n-skills",
+      "sourceType": "github",
+      "computedHash": "35a29eed70df68e28954f1739a398f836554cef488241e77b056ef406c3ae7da"
+    },
+    "n8n-workflow-patterns": {
+      "source": "czlonkowski/n8n-skills",
+      "sourceType": "github",
+      "computedHash": "6ffd6cdfcaa51dd0c5e6b1867fcaf862583bb98a8ad66a63c1b0c7ea599770ef"
+    },
+    "project-workflow-analysis-blueprint-generator": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "computedHash": "3d55c341daf416e131919657ef92616619bfa52b6caea81029b79a64e4f958a3"
+    }
+  }
+}

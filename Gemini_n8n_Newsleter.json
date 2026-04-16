@@ -1,0 +1,973 @@
+{
+  "name": "Gemini_n8n_Newsleter",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -224,
+        -144
+      ],
+      "id": "8caba5d3-8037-4c1a-922e-1cde77975107",
+      "name": "When clicking ‘Test workflow’"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "410334f0-df90-42e0-ab44-25b1722e6009",
+              "name": "empresa",
+              "value": "Adecoagro",
+              "type": "string"
+            },
+            {
+              "id": "6a6d27ac-6be4-4cf2-92b7-b563b6ef24e3",
+              "name": "fecha_reporte",
+              "value": "={{ $json.fecha || $today.minus({days:1}).format('yyyy-MM-dd') }}",
+              "type": "string"
+            },
+            {
+              "id": "f4858de9-a7ca-4aca-9146-e5680f2507c1",
+              "name": "query_busqueda",
+              "value": "=Adecoagro noticias argentina",
+              "type": "string"
+            },
+            {
+              "id": "418bbbf3-0aeb-4f80-b45a-077e4f084816",
+              "name": "empresas_asociadas",
+              "value": "=Pilagá, Molinos Ala, La Lácteo, Forsalta, Dinaluca, Avaldi, Agroinvest, Girasoles del plata, El Orden, La carolina, Energia Agro, Las 3 niñas, Apóstoles, Angelita, Arroz 53, Mani del plata, Molinos libre, Rio Pora, Bañado del salado, Simoneta, Adecoagro Chile, Adecoagro Uruguay, tether, Kelizer, Arroz del plata, Paso Dragon, Profertil",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              "name": "sitios_prioritarios",
+              "value": "clarin.com,lanacion.com.ar,infobae.com,cronista.com,iprofesional.com,perfil.com,eleconomista.com.ar,bichosdecampo.com,lapoliticaonline.com,infonegocios.info,adnsur.com.ar,inlitoral.info,ambito.com,portalagropecuario.com.ar,investing.com,forbesargentina.com",
+              "type": "string"
+            },
+            {
+              "id": "rss-feeds-001-config",
+              "name": "rss_feeds",
+              "value": "https://www.lanacion.com.ar/arc/outboundfeeds/rss/,https://www.lanacion.com.ar/arc/outboundfeeds/rss/category/economia/,https://www.clarin.com/rss/rural/,https://bichosdecampo.com/feed/,https://www.perfil.com/rss/,https://forbesargentina.com/feed/,https://eleconomista.com.ar/feed/",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        0,
+        -144
+      ],
+      "id": "c1a33937-39a0-486a-b54c-aedd3ec3721d",
+      "name": "Config"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── APLANAR RESULTADOS (Rama 1: Noticias principales) ────────────────────────\n// REGLA CLAVE: solo pasan artículos que mencionen \"Adecoagro\" explícitamente\n// en el título o snippet. Sin excepción.\n// Además: máx. 1 resultado por dominio de agregador financiero (Yahoo Finance,\n// StockAnalysis, etc.) para evitar redundancia de páginas de cotización.\n// ─────────────────────────────────────────────────────────────────────────────\n\nconst items = $input.all();\nconst results = [];\n\nconst socialBlacklist = [\n  'instagram.com', 'facebook.com', 'youtube.com',\n  'tiktok.com', 'twitter.com', 'x.com', 'linkedin.com', 'pinterest.com', 'threads.net'\n];\n\n// Dominios de agregadores financieros: solo se admite 1 resultado total\n// (múltiples páginas del precio de AGRO no aportan valor editorial)\nconst financialAggregators = [\n  'finance.yahoo.com', 'stockanalysis.com', 'stocktitan.net', 'thestreet.com',\n  'marketwatch.com', 'macrotrends.net', 'wisesheets.io', 'simplywall.st',\n  'gurufocus.com', 'finviz.com', 'barchart.com', 'stockcharts.com'\n];\n\n// Patrones de URL que son portadas/categorías genéricas (no artículos reales)\nconst isPortalPage = (url) => {\n  // /tag/slug, /category/slug, /etiqueta/slug, /autor/slug, etc.\n  if (/\\/(tag|category|etiqueta|topics?|labels?|autor(?:es)?|author|buscar|search)\\/[^?#]*/i.test(url)) return true;\n  // Secciones genéricas al final\n  if (/\\/(noticias|economia|agro|campo|finanzas|mercados|bursatil|noticias-agro)\\/?(?:\\?.*)?$/i.test(url)) return true;\n  // Páginas de cotización de bolsa: /quote/TICKER o /chart/\n  if (/\\/(?:quote|chart|symbol)\\/[^?#]*/i.test(url)) return true;\n  // URLs template/ejemplo (ej: clarin.com/newsletter/example/...)\n  if (/\\/(?:newsletter\\/example|newsletter\\/template|\\/example\\/)/i.test(url)) return true;\n  // Raíz de dominio sin path real\n  if (/^https?:\\/\\/[^\\/]+\\/?(?:\\?.*)?$/.test(url)) return true;\n  return false;\n};\n\nconst normalizar = (s) => (s||'').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');\n\n// Dominios prioritarios desde Config\nconst sitiosPrioritarios = ($('Config').item.json.sitios_prioritarios || '')\n  .split(',').map(d => d.trim()).filter(Boolean);\n\nlet financialCount = 0;  // contador de páginas de cotización ya incluidas\nconst seenUrls = new Set();\n\nfor (const item of items) {\n  const organic = item.json.organic || [];\n  for (const result of organic) {\n    const link = result.link || '';\n    const titulo  = result.title   || '';\n    const snippet = result.snippet || '';\n\n    // Descartar redes sociales\n    if (socialBlacklist.some(d => link.includes(d))) continue;\n\n    // Descartar portadas de portales\n    if (isPortalPage(link)) continue;\n\n    // Descartar duplicados por URL\n    if (seenUrls.has(link)) continue;\n\n    // REGLA PRINCIPAL: el título o snippet debe mencionar \"Adecoagro\" explícitamente\n    const texto = normalizar(titulo + ' ' + snippet);\n    if (!texto.includes('adecoagro')) continue;\n\n    // Límite de 1 página de agregador financiero (cotizaciones)\n    const esFinancial = financialAggregators.some(d => link.includes(d));\n    if (esFinancial) {\n      if (financialCount >= 1) continue;  // ya tenemos la cotización, descartar\n      financialCount++;\n    }\n\n    seenUrls.add(link);\n    const esPrioritario = sitiosPrioritarios.some(d => link.includes(d));\n\n    results.push({\n      json: {\n        url:           link,\n        title:         titulo,\n        snippet:       snippet,\n        source:        'Web',\n        date:          result.date || 'Reciente',\n        es_prioritario: esPrioritario,\n        es_financial:  esFinancial\n      }\n    });\n  }\n}\n\n// Prioritarios primero, luego el resto\nresults.sort((a, b) => (b.json.es_prioritario ? 1 : 0) - (a.json.es_prioritario ? 1 : 0));\nreturn results;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        -480
+      ],
+      "id": "e5cb9ffb-50c1-4797-b7da-629bf0e0c83a",
+      "name": "Aplanar Resultados"
+    },
+    {
+      "parameters": {
+        "executeOnce": false,
+        "command": "=python3 /home/node/python_scripts/scraper_n8n.py \"{{ $json.url }}\""
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        864,
+        -480
+      ],
+      "id": "2c89cedb-7db1-4714-ac3e-6b1c5ee3885b",
+      "name": "Scraper Python"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ── PARSEAR SCRAPER (Rama 1: Noticias principales) ───────────────────────────\n// Recibe el stdout del scraper Python + datos originales de Aplanar Resultados.\n// Valida si el scraper extrajo texto útil; si no, usa el snippet de Google.\n// Produce el esquema unificado que usa el resto del workflow.\n// ─────────────────────────────────────────────────────────────────────────────\n\n// 1. Parsear la salida JSON del script Python\nconst pythonOutput = JSON.parse($input.item.json.stdout);\n\n// 2. Recuperar los datos originales del resultado de Google (título, url, snippet)\nconst originalData = $(\"Aplanar Resultados\").item.json;\n\n// 3. Validar calidad del scraping:\n//    - El scraper debe haber tenido éxito (status === 'success')\n//    - El texto extraído debe mencionar \"adecoagro\" (evita leer el footer u otra nota)\nconst scraperOk    = pythonOutput.status === 'success' && pythonOutput.text;\nconst esRelevante  = scraperOk && pythonOutput.text.toLowerCase().includes('adecoagro');\n\nlet contenidoFinal, fuenteFinal, statusFinal;\n\nif (scraperOk && esRelevante) {\n  // CASO A — Éxito total: el scraper leyó la nota y menciona a la empresa\n  contenidoFinal = pythonOutput.text;\n  fuenteFinal    = 'Scraper Full';\n  statusFinal    = 'success';\n} else {\n  // CASO B — Fallback: scraper falló o el texto no es relevante → usar snippet de Google\n  // El snippet siempre es pertinente porque Google ya filtró por la query de la empresa\n  contenidoFinal = originalData.snippet || '';\n  fuenteFinal    = 'Google Snippet (Fallback)';\n  statusFinal    = 'fallback';\n}\n\n// 4. Hash de contenido para deduplicación (mismo campo en todos los ramas)\nconst content_hash = pythonOutput.content_hash\n  || 'web_' + originalData.title.replace(/\\s+/g, '').toLowerCase().slice(0, 40);\n\n// 5. Retornar esquema unificado (igual al de Rama 2 y Rama 3)\nreturn {\n  json: {\n    url:          originalData.url,       // campo unificado (no \"link\")\n    titulo:       originalData.title,\n    contenido:    contenidoFinal,          // campo unificado (no \"text\")\n    content_hash: content_hash,            // campo unificado (no \"hash\")\n    tipo_fuente:  'web',                   // se setea aquí; el nodo Set posterior también lo pone (redundante pero inofensivo)\n    fecha:        originalData.date || '',\n    fuente_scraper: fuenteFinal,\n    status_scraper: statusFinal\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        -480
+      ],
+      "id": "777f1211-71a5-4d96-abf0-ecf54e1c3930",
+      "name": "Parsear Scraper"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Actúa como un Analista de Inteligencia de Negocios Senior.\nTu objetivo es auditar la presencia mediática de ADECOAGRO y sus subsidiarias (Pilagá, Molinos Ala, La Lácteo).\n\nINPUT DE DATOS:\n{{ $json }}\n\nINSTRUCCIONES:\n\n1. ANÁLISIS POR SECCIÓN (3 resúmenes breves, máximo 2 párrafos cada uno):\n   - resumen_noticias: tendencias y sentimiento de las noticias web (tipo_fuente: \"web\").\n   - resumen_social: actividad en redes sociales (tipo_fuente: \"social\"). Si no hay ítems, indicarlo.\n   - resumen_empresas: cobertura de empresas asociadas (tipo_fuente: \"web_asociada\"). Si no hay, indicarlo.\n\n2. PROCESAMIENTO DE ÍTEMS — CRÍTICO:\n   - Devuelve EN \"items\" la TOTALIDAD de los ítems del input. UNO por UNO, sin omitir ninguno.\n   - Si recibes 30 ítems → \"items\" debe tener exactamente 30 elementos.\n\n3. CAMPO tipo_fuente:\n   - Cada ítem tiene \"tipo_fuente\" en el input. COPIALO tal cual al output.\n   - Valores posibles: \"web\", \"social\", \"web_asociada\".\n\n4. CLASIFICACIÓN (campo \"categoria\"):\n   - \"Social\": tipo_fuente === \"social\"\n   - \"Marca Principal\": noticias directas de Adecoagro (tipo_fuente \"web\")\n   - \"Empresas Asociadas\": cubre Pilagá, Molinos Ala, La Lácteo, etc. (tipo_fuente \"web_asociada\")\n   - \"Sector\": mercado o sector agro en general\n\n5. REGLA CRÍTICA DE URLs:\n   - Copia la URL EXACTAMENTE del campo \"url\" del input. NUNCA la inventes ni modifiques.\n   - Si no hay URL, pon \"#\".\n\n6. CAMPO \"empresa\":\n   - Para tipo_fuente \"web\": asigna \"Adecoagro\" si la noticia menciona explícitamente a Adecoagro o ticker AGRO. Si no menciona la empresa, deja vacío \"\".\n   - Para tipo_fuente \"social\": asigna \"Adecoagro\".\n   - Para tipo_fuente \"web_asociada\": copia el campo \"empresa\" del input tal cual.\n\n7. IDIOMA Y VALORES:\n   - Usa ÚNICAMENTE español en todos los campos textuales (título, resumen, categoria, sentimiento).\n   - El campo \"sentimiento\" SOLO puede tener estos tres valores exactos: \"Positivo\", \"Neutro\", \"Negativo\".\n   - NO uses \"Neutral\", \"Positive\", \"Negative\" ni ninguna otra variante.\n   - NO uses comillas simples (') para cerrar strings JSON. Usa siempre comillas dobles (\").\n\nFORMATO DE SALIDA (JSON puro, sin markdown):\n{\n  \"resumen_noticias\": \"Párrafo 1...\\n\\nPárrafo 2...\",\n  \"resumen_social\": \"Párrafo sobre redes sociales...\",\n  \"resumen_empresas\": \"Párrafo sobre empresas asociadas...\",\n  \"items\": [\n    {\n      \"titulo\": \"Titular del ítem\",\n      \"resumen\": \"Breve descripción con cifras y nombres propios.\",\n      \"categoria\": \"Marca Principal|Empresas Asociadas|Sector|Social\",\n      \"sentimiento\": \"Positivo|Neutro|Negativo\",\n      \"url_real\": \"URL copiada exactamente del campo url del input\",\n      \"medio\": \"Nombre del medio o red social\",\n      \"fecha\": \"Fecha si viene en el input\",\n      \"empresa\": \"Empresa asociada si aplica, sino vacío\",\n      \"tipo_fuente\": \"web|social|web_asociada\",\n      \"es_red_social\": false\n    }\n  ]\n}",
+              "role": "system"
+            },
+            {
+              "content": "=Lista COMPLETA: {{ $json.noticias_del_dia.length }} ítems. Devuelve exactamente ese número en 'items'. Copia tipo_fuente y url de cada ítem sin modificar:\n{{ JSON.stringify($json.noticias_del_dia) }}"
+            }
+          ]
+        },
+        "simplify": "={{ true }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        2512,
+        80
+      ],
+      "id": "4cfcbef4-2e8b-42b6-892d-d226d948b1e1",
+      "name": "OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": "fQU2YfyJyYAua83v",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "organic",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        416,
+        -128
+      ],
+      "id": "aa79d624-c0ac-437c-a0c5-8e39c3b716fb",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://google.serper.dev/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"q\": \"{{ $json.query }}\",\n  \"gl\": \"ar\",\n  \"hl\": \"es\",\n  \"num\": 20,\n  \"tbs\": \"qdr:d1\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        416,
+        -480
+      ],
+      "id": "a7e85f0f-0f29-452f-8801-c53966a01585",
+      "name": "Serper Search News",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "5RIxNjHdgNP8whEm",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://google.serper.dev/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"q\": \"site:instagram.com OR site:facebook.com OR site:tiktok.com OR site:youtube.com OR site:threads.net OR site:twitter.com OR site:x.com \\\"{{ $json.empresa }}\\\"\",\n  \"tbs\": \"qdr:d\",\n  \"num\": 20\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        192,
+        -128
+      ],
+      "id": "93e9ba4c-f209-4bce-82a8-5e2dbe210ba3",
+      "name": "Serper Search Social",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "5RIxNjHdgNP8whEm",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── NORMALIZAR SOCIAL (Rama 2: Redes sociales) ───────────────────────────────\n// REGLA CLAVE: solo pasan posts que mencionen \"adecoagro\" (o AGRO como ticker)\n// explícitamente en título o snippet. No alcanza con palabras del sector.\n// ─────────────────────────────────────────────────────────────────────────────\n\n// Dominios de e-commerce y spam\nconst dominiosEcommerce = [\n  'mercadolibre', 'mercadolivre', 'amazon', 'pedidosya', 'rappi',\n  'supermercado', 'elcondor', 'walmart', 'coto.com', 'disco.com',\n  'jumbo.com', 'carrefour', 'makro', 'easy.com', 'fravega'\n];\n\nconst normalizar = (s) => (s||'').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');\n\nconst resultado = [];\nconst seenHashes = new Set();\n\nfor (const item of $input.all()) {\n  const rawUrl   = item.json.link || '';\n  const titulo   = item.json.title   || '';\n  const snippet  = item.json.snippet || '';\n  const urlLower = rawUrl.toLowerCase();\n\n  // A. Descartar e-commerce y spam\n  if (dominiosEcommerce.some(d => urlLower.includes(d))) continue;\n\n  // B. REGLA PRINCIPAL: el título o snippet debe mencionar \"adecoagro\" explícitamente\n  //    También aceptar ticker \"agro\" como palabra independiente (ej: \"$AGRO\" o \"AGRO stock\")\n  const textoNorm = normalizar(titulo + ' ' + snippet);\n  const mencionaAdecoagro = textoNorm.includes('adecoagro');\n  const mencionaTickerAgro = /\\bagro\\b/.test(textoNorm) &&\n    (textoNorm.includes('accion') || textoNorm.includes('stock') || textoNorm.includes('ticker') ||\n     textoNorm.includes('bolsa') || textoNorm.includes('inversi') || textoNorm.includes('adr'));\n\n  if (!mencionaAdecoagro && !mencionaTickerAgro) continue;\n\n  // C. Hash para deduplicación\n  let hashNum = 0;\n  for (let i = 0; i < rawUrl.length; i++) {\n    hashNum = ((hashNum << 5) - hashNum) + rawUrl.charCodeAt(i);\n    hashNum |= 0;\n  }\n  const content_hash = 'soc_' + Math.abs(hashNum).toString();\n  if (seenHashes.has(content_hash)) continue;\n  seenHashes.add(content_hash);\n\n  resultado.push({\n    json: {\n      url:          rawUrl,\n      titulo:       titulo,\n      contenido:    snippet,\n      content_hash: content_hash,\n      tipo_fuente:  'social',\n      fecha:        item.json.date || '',\n      empresa:      'Adecoagro'\n    }\n  });\n}\n\nreturn resultado;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        -128
+      ],
+      "id": "1fed2b69-152f-4a34-87e4-ce9393200746",
+      "name": "Normalizar Social"
+    },
+    {
+      "parameters": {
+        "numberInputs": 4
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1472,
+        -144
+      ],
+      "id": "b4788af5-b704-4bf7-b9c7-9c5fb723f445",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "noticias_del_dia",
+        "include": "specifiedFields",
+        "fieldsToInclude": "url, titulo, contenido, tipo_fuente, content_hash, fecha, empresa",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        2288,
+        80
+      ],
+      "id": "9e1c295c-b205-4c4c-9c6f-7e95fee04e65",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7618d5f2-a190-4c59-8a9c-3e6fcf1cb192",
+              "name": "tipo_fuente",
+              "value": "web",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1312,
+        -480
+      ],
+      "id": "6fe584d6-997e-493c-9acc-3e4e3b9838f2",
+      "name": "agregar tipo_fuente:web"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── APLANAR RESULTADOS 1 (Rama 3: Empresas asociadas) ────────────────────────\n// Recibe los resultados de Serper para cada empresa asociada.\n// Aplica filtros en cascada: basura técnica → veneno global → blacklist contextual\n// NUEVO: para empresas con nombre ambiguo, exige al menos 1 keyword positiva.\n// ─────────────────────────────────────────────────────────────────────────────\n\nlet resultadosAcumulados = [];\n\n// Agregadores financieros: max 1 resultado por empresa\nconst financialAggregators = [\n  'finance.yahoo.com', 'stockanalysis.com', 'stocktitan.net', 'thestreet.com',\n  'marketwatch.com', 'macrotrends.net', 'wisesheets.io', 'simplywall.st',\n  'gurufocus.com', 'finviz.com', 'barchart.com', 'stockcharts.com',\n  'investing.com', 'tradingview.com'\n];\nconst finCountPerEmpresa = {};\n\nconst normalizar = (str) =>\n  (str || '').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\n\n// ── 1. DOMINIOS TÉCNICOS DESCARTADOS ──\nconst dominiosBasura = [\n  // Redes sociales (manejadas por Rama 2)\n  'facebook.com','instagram.com','twitter.com','x.com',\n  'tiktok.com','linkedin.com','youtube.com','pinterest.com','jw.org',\n  // E-commerce y supermercados (no son fuentes de noticias)\n  'mercadolibre','mercadolivre','amazon.com','pedidosya','rappi.com',\n  'supermercado','elcondor','walmart.com','coto.com','disco.com',\n  'jumbo.com','carrefour','makro.com','easy.com','fravega.com',\n  'tiendamia','linikers','tiendanube'\n];\n\n// ── 2. VENENO GLOBAL (aplica a todas las empresas) ──\nconst palabrasVenenoGlobal = [\n  'horoscopo','signos del zodiaco','tarot','sexo','xxx',\n  'casino online','juegos de azar','loteria'\n];\n\n// ── 3. BLACKLISTS CONTEXTUALES: términos que delatan homonimia (filtro NEGATIVO) ──\nconst blacklistsContextuales = {\n  \"apostoles\": [\n    // Localidad de Misiones\n    \"semana santa\",\"pesanke\",\"turismo\",\"municipio\",\"intendente\",\n    \"localidad\",\"capital provincial\",\"clima\",\"pronostico\",\"tiempo\",\n    \"medicamentos\",\"hospital\",\"farmacia\",\"vecinos\",\"feligreses\",\n    // Motín/policiales\n    \"motin\",\"preso\",\"detenido\",\"comisaria\",\"juzgado\",\"penal\"\n  ],\n  \"pilaga\": [\n    \"etnia\",\"aborigen\",\"indigena\",\"wichi\",\"qom\",\"comunidad originaria\",\n    \"bano la estrella\",\"las lomitas\",\"desarrollo humano\",\n    \"asistencia social\",\"ministerio\",\"riacho\",\"caja de prevision\"\n  ],\n  \"la carolina\": [\n    \"turismo\",\"cabanas\",\"trekking\",\"vacaciones\",\"sierra\",\"gruta\",\"spa\",\n    \"mina de oro\",\"festival\",\"folklore\",\"pena criolla\",\n    // Ecuador\n    \"quito\",\"ecuador\",\"organismo\",\"policia nacional\"\n  ],\n  \"angelita\": [\n    \"nodal\",\"christian\",\"yanina\",\"lam\",\"angel de brito\",\n    \"chimentos\",\"nieta\",\"beba\",\"inti\",\"tini\",\"farandula\"\n  ],\n  \"simoneta\": [\n    \"borbon\",\"familia real\",\"reina\",\"trono\",\"telenovela\",\"actriz\",\"televisa\"\n  ],\n  \"el orden\": [\n    \"orden mundial\",\"orden global\",\"filosofia\",\"politico\",\"seguridad publica\",\n    \"fuerza de seguridad\",\"gobernador\",\"presidente\",\"congreso\"\n  ],\n  \"la lacteo\": [\n    // Evitar noticias de lácteos europeos o genéricos sin relación con la empresa\n    \"castilla\",\"leon\",\"galicia\",\"espana\",\"europa\",\"nueva zelanda\",\"uruguay exporta\",\n    \"estudio clinico\",\"nutricion infantil\"\n  ],\n  \"apostoles\": [\n    // Alias por si viene normalizado distinto\n    \"semana santa\",\"pesanke\",\"turismo\",\"municipio\",\"pronostico\"\n  ]\n};\n\n// ── 4. KEYWORDS POSITIVAS: empresas ambiguas DEBEN mencionar al menos una ──\n// Si el snippet no menciona ninguna de estas palabras, la noticia no es del rubro.\nconst keywordsPositivas = {\n  \"apostoles\":   [\"lacteo\",\"leche\",\"yogur\",\"queso\",\"crema\",\"manteca\",\"dairy\",\"adecoagro\",\"agro\",\"campo\",\"hacienda\"],\n  \"la lacteo\":   [\"argentina\",\"adecoagro\",\"industria lactea argentina\"],\n  \"el orden\":    [\"campo\",\"agro\",\"adecoagro\",\"misiones\",\"corrientes\",\"entre rios\",\"granos\",\"hacienda\"],\n  \"angelita\":    [\"agro\",\"campo\",\"adecoagro\",\"granja\",\"hacienda\",\"lacteo\",\"soja\",\"girasol\"],\n  \"simoneta\":    [\"agro\",\"campo\",\"adecoagro\",\"hacienda\",\"bovino\",\"granos\"],\n  \"pilaga\":      [\"azucar\",\"cana\",\"agro\",\"adecoagro\",\"campo\",\"ingenio\",\"hacienda\"],\n  \"tether\":      [\"adecoagro\"],\n  \"la carolina\": [\"agro\",\"campo\",\"adecoagro\",\"hacienda\",\"bovino\",\"soja\",\"granos\"],\n  // Profertil puede coincidir con noticias genéricas de fertilizantes globales\n  \"profertil\":   [\"fertilizante\",\"urea\",\"nitrogenado\",\"amoniaco\",\"agro\",\"campo\",\"adecoagro\",\"planta\",\"produccion\",\"argentina\"],\n};\n\n// ── 4b. FILTRO DE PORTADAS: descartar URLs que sean categorías, tags o portadas ──\nconst isPortalPage = (url) => {\n  // Captura /tag/slug, /category/slug, /etiqueta/slug, /autor/slug, etc.\n  if (/\\/(tag|category|etiqueta|topics?|labels?|autor(?:es)?|author|buscar|search)\\/[^?#]*/i.test(url)) return true;\n  // Captura URLs que terminan en secciones genéricas\n  if (/\\/(noticias|economia|agro|campo|finanzas|mercados|bursatil|noticias-agro)\\/?(?:\\?.*)?$/i.test(url)) return true;\n  // Captura raíces de dominio sin path real\n  if (/^https?:\\/\\/[^\\/]+\\/?(?:\\?.*)?$/.test(url)) return true;\n  return false;\n};\n\n// ── 5. VIP: estas keywords hacen pasar el item sin importar los filtros ──\n// Quitamos \"tether\" del VIP — ya tiene su propio filtro positivo arriba\nconst keywordsVitales = [\n  'adecoagro','profertil','bioceres',\n  'fertilizante','productora','acreedores','inversion',\n  'mercado de capitales','campo argentino'\n];\n\nfor (const item of items) {\n  const organicResults = item.json.organic || [];\n\n  // Recuperar nombre de empresa — priorizar campo empresa_asociada del item original\n  let empresaOriginal = item.json.empresa_asociada || 'Empresa Desconocida';\n  if (empresaOriginal === 'Empresa Desconocida') {\n    // Fallback: extraer del campo q de searchParameters\n    const match = (item.json.searchParameters?.q || '').match(/\"([^\"]+)\"/);\n    if (match && match[1]) {\n      empresaOriginal = match[1];\n    } else {\n      empresaOriginal = (item.json.searchParameters?.q || '')\n        .split(' ').find(w => w.length > 4 && !['noticias','argentina','agro','campo','adecoagro','site:','OR'].includes(w.toLowerCase())) || 'Empresa';\n    }\n  }\n\n  const empresaNorm = normalizar(empresaOriginal);\n  if (organicResults.length === 0) continue;\n\n  const filtrados = organicResults.filter(noticia => {\n    const link       = (noticia.link || '').toLowerCase();\n    const titulo     = normalizar(noticia.title);\n    const snippet    = normalizar(noticia.snippet);\n    const textoTotal = titulo + ' ' + snippet;\n\n    // A. Dominios técnicos descartados\n    if (dominiosBasura.some(d => link.includes(d))) return false;\n\n    // A2. Descartar portadas/categorías de portales (sin artículo real)\n    if (isPortalPage(link)) return false;\n\n    // B. Veneno global\n    if (palabrasVenenoGlobal.some(p => textoTotal.includes(normalizar(p)))) return false;\n\n    // C. VIP — pasa sin más checks (excepto Tether que tiene su filtro positivo)\n    const esVip = keywordsVitales.some(k => textoTotal.includes(normalizar(k)));\n    if (esVip && empresaNorm !== 'tether') return true;\n\n    // D. Blacklist contextual según empresa\n    const reglaBlack = Object.keys(blacklistsContextuales)\n      .find(k => empresaNorm.includes(k) || k.includes(empresaNorm));\n    if (reglaBlack) {\n      const prohibidas = blacklistsContextuales[reglaBlack];\n      if (prohibidas.some(p => textoTotal.includes(normalizar(p)))) return false;\n    }\n\n    // E. NUEVO — Keywords positivas: para empresas ambiguas, exigir al menos 1\n    const reglaPosi = Object.keys(keywordsPositivas)\n      .find(k => empresaNorm.includes(k) || k.includes(empresaNorm));\n    if (reglaPosi) {\n      const requeridas = keywordsPositivas[reglaPosi];\n      const tieneAlMenosUna = requeridas.some(p => textoTotal.includes(normalizar(p)));\n      if (!tieneAlMenosUna) return false;  // No habla del rubro correcto\n    }\n\n    // F. Para Apóstoles específicamente: aunque pase keyword \"leche\",\n    //    verificar que la URL no sea una página de producto de supermercado\n    if (empresaNorm.includes('apostoles')) {\n      const urlN = (noticia.link||'').toLowerCase();\n      const esProducto = ['producto','shop','comprar','precio','oferta','catalogo','ficha']\n        .some(p => urlN.includes(p));\n      if (esProducto) return false;\n    }\n\n    return true;\n  });\n\n  // Max 1 página de cotización por empresa\n  const filtradosFin = filtrados.filter(noticia => {\n    const esFinancial = financialAggregators.some(d => (noticia.link||'').includes(d));\n    if (!esFinancial) return true;\n    finCountPerEmpresa[empresaNorm] = (finCountPerEmpresa[empresaNorm] || 0) + 1;\n    return finCountPerEmpresa[empresaNorm] <= 1;\n  });\n\n  const mapeados = filtradosFin.map(noticia => ({\n    json: {\n      url:               noticia.link,\n      titulo:            noticia.title,\n      snippet:           noticia.snippet,\n      source:            'Web Asociada',\n      empresa:           empresaOriginal,\n      fecha_publicacion: noticia.date || 'Sin fecha',\n      tipo_fuente:       'web_asociada'\n    }\n  }));\n\n  resultadosAcumulados.push(...mapeados);\n}\n\nreturn resultadosAcumulados;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        592,
+        192
+      ],
+      "id": "ad544711-802d-4a86-9ed5-a7dfc450c7eb",
+      "name": "Aplanar Resultados1"
+    },
+    {
+      "parameters": {
+        "executeOnce": false,
+        "command": "=python3 /home/node/python_scripts/scraper_n8n.py \"{{ $json.url }}\""
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        784,
+        192
+      ],
+      "id": "0c1d19ea-7336-4085-bc38-8043f2129c8b",
+      "name": "Scraper Python1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── PARSEAR SCRAPER 1 (Rama 3: Empresas asociadas) ───────────────────────────\n// Recibe stdout del scraper Python para cada URL de empresa asociada.\n// Aplica filtros para descartar noticias irrelevantes (ruido de homonimias).\n// A diferencia de Rama 1, incluye blacklists contextuales por empresa.\n// Ahora con fallback a snippet cuando el scraper falla (igual que Rama 1).\n// ─────────────────────────────────────────────────────────────────────────────\n\n// ── PASE VIP: si el artículo menciona estas palabras, pasa sin importar nada más\n// Nota: \"tether\" ya NO es VIP — solo pasa si menciona \"adecoagro\" (filtro positivo abajo)\nconst VIP_KEYWORDS = [\n  'profertil', 'adecoagro', 'bioceres',\n  'bit-cow', 'bit cow', 'moolec', 'inversión en adecoagro', 'adquisición adecoagro'\n];\n\n// ── KEYWORDS POSITIVAS sobre contenido completo (segunda pasada post-scraper) ──\n// Para empresas ambiguas: si el texto completo no contiene al menos una keyword\n// del rubro, descartamos — aunque haya pasado el filtro de snippet.\nconst CONTENT_REQUIRED = {\n  'apostoles':   ['lacteo','leche','yogur','queso','crema','manteca','adecoagro'],\n  'la lacteo':   ['argentina','adecoagro'],\n  'el orden':    ['campo','agro','adecoagro','misiones','corrientes'],\n  'angelita':    ['agro','campo','adecoagro','granja','hacienda','lacteo'],\n  'simoneta':    ['agro','campo','adecoagro','hacienda','bovino'],\n  'pilaga':      ['azucar','cana','agro','adecoagro','campo','ingenio'],\n  'tether':      ['adecoagro'],\n  'la carolina': ['agro','campo','adecoagro','hacienda','bovino'],\n};\n\n// ── BLACKLIST GLOBAL: descarta siempre, salvo que sea VIP\nconst GLOBAL_BLACKLIST = [\n  // Crónica roja\n  'motochorro', 'asalto a mano armada', 'robo calificado', 'policiales',\n  'detenido', 'comisaría', 'allanamiento', 'femicidio', 'asesinato', 'cadáver',\n  'siniestro vial', 'vuelco', 'choque', 'accidente de tránsito', 'inseguridad', 'heridos',\n  // Salud y desastres\n  'hantavirus', 'dengue', 'zika', 'vacunación', 'hospital distrital',\n  'incendio', 'fuego', 'bomberos', 'llamas', 'brigadistas', 'avión hidrante',\n  // Obras públicas y municipios\n  'vialidad', 'bacheo', 'pavimento', 'cordón cuneta', 'red de agua potable',\n  'cloacas', 'alumbrado público', 'poda', 'cronograma de pagos', 'anses',\n  'licitación pública', 'apertura de sobres', 'municipio de', 'intendente',\n  // Farándula y realeza\n  'gran hermano', 'horóscopo', 'wanda nara', 'pampita', 'infanta', 'realeza',\n  'duquesa', 'princesa', 'borbón', 'rey juan carlos', 'farándula', 'espectáculos',\n  // Basura web\n  'casino online', 'tragamonedas', 'avisos legales', 'política de cookies',\n  'error 404', 'copyright', 'all rights reserved', 'suscríbete'\n];\n\n// ── BLACKLISTS CONTEXTUALES: ruido específico de empresas con nombre homónimo\nconst CONTEXTUAL_BLACKLIST = {\n  'pilaga':      ['riacho', 'etnia', 'indigena', 'indígena', 'wichi', 'qom', 'aborigen', 'baño la estrella', 'las lomitas', 'comunidad originaria', 'desarrollo humano', 'asistencia social', 'entrega de módulos', 'caja de previsión', 'ministerio'],\n  'la carolina': ['arroyo', 'festival', 'turismo', 'sierra', 'san luis', 'cabaña', 'alquiler', 'vacaciones', 'hotel', 'spa', 'peña', 'folklore', 'trekking', 'mina de oro', 'gruta', 'virgen'],\n  'simoneta':    ['borbón', 'familia real', 'reina', 'trono', 'telenovela'],\n  'angelita':    ['lam', 'yanina', 'angel de brito', 'chimentos'],\n  'el orden':    ['policiales', 'muerto', 'accidente', 'hospital', 'comisaría'],\n  'apostoles':   ['policiales', 'policía', 'patrulla', 'menores', 'desorientados', 'juez', 'penal', 'comisaría', 'siniestro']\n};\n\nconst resultadosFinales = [];\n\nfor (const item of items) {\n\n  // ── Parsear salida Python ──\n  let datosScraper = {};\n  const scraperExitOk = item.json.exitCode === 0 && item.json.stdout;\n\n  if (scraperExitOk) {\n    try { datosScraper = JSON.parse(item.json.stdout); } catch(e) { /* JSON roto */ }\n  }\n\n  // ── Recuperar datos originales de Aplanar Resultados1 (snippet, título, empresa) ──\n  let datosOriginales = {};\n  try {\n    if (item.pairedItem !== undefined) {\n      const parentItem = $('Aplanar Resultados1').itemMatching(item.pairedItem.item || item.pairedItem);\n      if (parentItem && parentItem.json) datosOriginales = parentItem.json;\n    }\n  } catch(e) { /* no se pudo recuperar parent */ }\n\n  const empresaOrigen = (datosOriginales.empresa || item.json.empresa || 'Desconocida').toLowerCase().trim();\n  const urlOriginal   = datosOriginales.url || datosScraper.url || '';\n  const tituloOrig    = datosOriginales.titulo || '';\n  const snippetOrig   = datosOriginales.snippet || '';\n\n  // ── Determinar contenido a usar ──\n  const scraperTrajoTexto = datosScraper.status === 'success' && datosScraper.text && datosScraper.text.length >= 250;\n  let contenidoFinal, fuenteFinal;\n\n  if (scraperTrajoTexto) {\n    contenidoFinal = datosScraper.text.length > 20000\n      ? datosScraper.text.substring(0, 20000) + '... [TEXTO RECORTADO]'\n      : datosScraper.text;\n    fuenteFinal = 'Scraper Full';\n  } else {\n    // FALLBACK: usar snippet de Google si el scraper falló o trajo poco texto\n    if (!snippetOrig) continue; // sin snippet ni scraper → descartar\n    contenidoFinal = snippetOrig;\n    fuenteFinal    = 'Google Snippet (Fallback)';\n  }\n\n  // ── Aplicar filtros de calidad (solo si NO es VIP) ──\n  const textoAnalisis = (tituloOrig + ' ' + contenidoFinal).toLowerCase()\n    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\n\n  const esVip = VIP_KEYWORDS.some(k => textoAnalisis.includes(k));\n\n  if (!esVip) {\n    // Blacklist global\n    if (GLOBAL_BLACKLIST.some(k =>\n      textoAnalisis.includes(k.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''))\n    )) continue;\n\n    // Blacklist contextual según empresa\n    const empresaNorm = empresaOrigen.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\n    const regla = Object.keys(CONTEXTUAL_BLACKLIST).find(k => empresaNorm.includes(k) || k.includes(empresaNorm));\n    if (regla) {\n      const palabras = CONTEXTUAL_BLACKLIST[regla];\n      if (palabras.some(p =>\n        textoAnalisis.includes(p.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, ''))\n      )) continue;\n    }\n  }\n\n  // ── Segunda pasada: verificar keywords positivas en contenido completo ──\n  const empKey = Object.keys(CONTENT_REQUIRED)\n    .find(k => empresaOrigen.includes(k) || k.includes(empresaOrigen));\n  if (empKey && !esVip) {\n    const contenidoNorm = contenidoFinal.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');\n    const cumple = CONTENT_REQUIRED[empKey].some(p => contenidoNorm.includes(p));\n    if (!cumple) continue;  // El texto completo tampoco habla del rubro → descartar\n  }\n\n  // ── Hash para deduplicación (campo unificado) ──\n  const content_hash = datosScraper.content_hash\n    || 'emp_' + urlOriginal.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 40);\n\n  // ── Esquema unificado (igual a Ramas 1 y 2) ──\n  resultadosFinales.push({\n    json: {\n      url:           urlOriginal,\n      titulo:        tituloOrig,\n      contenido:     contenidoFinal,\n      content_hash:  content_hash,\n      tipo_fuente:   'web_asociada',\n      fecha:         datosOriginales.fecha_publicacion || '',\n      empresa:       empresaOrigen,\n      fuente_scraper: fuenteFinal\n    }\n  });\n}\n\n// ── Dedup interno por hash (por si dos fuentes trajeron la misma nota) ──\nconst vistos = new Set();\nreturn resultadosFinales.filter(r => {\n  if (vistos.has(r.json.content_hash)) return false;\n  vistos.add(r.json.content_hash);\n  return true;\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        992,
+        192
+      ],
+      "id": "40a441fe-b2e5-4b6b-8d58-146ad8b9ac17",
+      "name": "Parsear Scraper1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://google.serper.dev/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  \"q\": $json.query_busqueda_asociada,\n  \"gl\": \"ar\",\n  \"hl\": \"es\",\n  \"num\": 10,\n  \"tbs\": \"qdr:d1\"\n}\n}}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        368,
+        192
+      ],
+      "id": "c7ee5a7f-f433-4fb9-b527-5efff8a3f8c1",
+      "name": "Serper Search Emp Asoc",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "5RIxNjHdgNP8whEm",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── SPLIT EMPRESAS ────────────────────────────────────────────────────────────\n// Queries optimizadas por empresa con contexto de sector y fuentes argentinas.\n// Para nombres ambiguos se añaden restricciones de sitio y términos del rubro.\n// ─────────────────────────────────────────────────────────────────────────────\n\nconst item = items[0].json;\nconst empresasString = item.empresas_asociadas || item.query_busqueda;\n\nif (!empresasString) {\n  throw new Error(\"No se encontró el campo 'empresas_asociadas' en Config.\");\n}\n\n// Fuentes de medios argentinos especializados en agro/economía\nconst MEDIOS_ARG = 'site:infobae.com OR site:cronista.com OR site:ambito.com OR site:agrofy.com.ar OR site:agrositio.com OR site:clarin.com OR site:lanacion.com OR site:bichosdecampo.com OR site:agrovoz.com.ar OR site:eldestapeweb.com';\n\nconst queriesEspeciales = {\n  // Profertil: empresa de fertilizantes, búsqueda con términos de sector\n  \"Profertil\":     '\"Profertil\" (fertilizante OR urea OR nitrogenado OR amoniaco OR agro OR campo OR produccion) ' + MEDIOS_ARG,\n  // Apóstoles: hacienda láctea de Adecoagro — término específico del rubro\n  \"Apóstoles\":     '\"Apóstoles\" (lacteo OR leche OR adecoagro OR hacienda OR yogur) ' + MEDIOS_ARG,\n  // La Carolina: hacienda ganadera\n  \"La carolina\":   '\"La Carolina\" (adecoagro OR hacienda OR bovino OR campo OR soja) ' + MEDIOS_ARG,\n  // El Orden: estancia/campo\n  \"El Orden\":      '\"El Orden\" (adecoagro OR campo OR agro OR misiones OR corrientes OR hacienda) ' + MEDIOS_ARG,\n  // Angelita: campo/hacienda\n  \"Angelita\":      '\"Angelita\" (adecoagro OR agro OR campo OR hacienda OR granja OR lacteo) ' + MEDIOS_ARG,\n  // Simoneta: hacienda\n  \"Simoneta\":      '\"Simoneta\" (adecoagro OR agro OR campo OR hacienda OR bovino) ' + MEDIOS_ARG,\n  // Tether: SOLO nos interesa si habla de Adecoagro\n  \"tether\":        '\"Tether\" adecoagro',\n  // La Lácteo: planta procesadora de leche\n  \"La Lácteo\":     '\"La Lácteo\" OR \"La Lacteo\" (adecoagro OR leche OR lacteo OR argentina) ' + MEDIOS_ARG,\n  // Pilagá: ingenio azucarero\n  \"Pilagá\":        '\"Pilagá\" OR \"Pilaga\" (azucar OR cana OR adecoagro OR campo OR ingenio OR agro) ' + MEDIOS_ARG,\n};\n\nconst listaEmpresas = empresasString.split(',').map(e => e.trim());\n\nreturn listaEmpresas.map(empresa => {\n  const queryEspecial = queriesEspeciales[empresa] || queriesEspeciales[empresa.toLowerCase()];\n  const query = queryEspecial || `\"${empresa}\" adecoagro OR agro campo argentina`;\n  return {\n    json: {\n      empresa_asociada: empresa,\n      query_busqueda_asociada: query,\n      tipo_fuente: \"web_asociada\"\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        144,
+        192
+      ],
+      "id": "c79f6582-687a-4112-a2b3-ee97d0fba4bd",
+      "name": "Split Empresas"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Esto simplemente pasa todo lo que recibió acumulado\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        192
+      ],
+      "id": "4f16e84f-e088-40ec-aaaf-8a94f89275ea",
+      "name": "Juntar Resultados Loop"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ══════════════════════════════════════════════════════════════════════════════\n// GENERADOR HTML — 3 secciones con estilo original\n// Sección 1: Noticias principales (web)\n// Sección 2: Redes Sociales (social) + treemap por red\n// Sección 3: Empresas Asociadas (web_asociada) + acordeón por empresa\n// ══════════════════════════════════════════════════════════════════════════════\n\n// ── 1. PARSEAR OUTPUT DEL LLM ─────────────────────────────────────────────────\n// sanitizeJson: reemplaza caracteres de control literales dentro de strings JSON.\n// Maneja casos donde el LLM devuelve newlines u otros chars sin escapar en strings.\nfunction sanitizeJson(s) {\n  let out = '';\n  let inStr = false;\n  let i = 0;\n  while (i < s.length) {\n    const ch = s[i];\n    if (inStr) {\n      if (ch === '\\\\') {\n        out += ch;\n        if (i + 1 < s.length) { i++; out += s[i]; }\n      } else if (ch === '\"') {\n        inStr = false;\n        out += ch;\n      } else if (ch.charCodeAt(0) < 32) {\n        out += ' '; // reemplazar control chars con espacio\n      } else {\n        out += ch;\n      }\n    } else {\n      if (ch === '\"') inStr = true;\n      out += ch;\n    }\n    i++;\n  }\n  return out;\n}\n\n// buildFallbackItems: construye items desde la respuesta cruda de Merge cuando\n// el JSON del LLM no se puede parsear. Usa los datos originales del workflow.\nfunction buildFallbackItems() {\n  try {\n    return $('Merge').all().map(i => ({\n      titulo:      i.json.titulo || '',\n      resumen:     (i.json.contenido || '').slice(0, 300),\n      categoria:   i.json.tipo_fuente === 'social' ? 'Social'\n                 : i.json.tipo_fuente === 'web_asociada' ? 'Empresas Asociadas'\n                 : 'Marca Principal',\n      sentimiento: 'Neutro',\n      url_real:    i.json.url || '',\n      medio:       '',\n      fecha:       i.json.fecha || '',\n      empresa:     i.json.empresa || '',\n      tipo_fuente: i.json.tipo_fuente || 'web',\n      es_red_social: i.json.tipo_fuente === 'social',\n    }));\n  } catch(e) { return []; }\n}\n\nlet data = { resumen_noticias: '', resumen_social: '', resumen_empresas: '', items: [] };\ntry {\n  const raw = items[0].json.content || items[0].json.message?.content || items[0].json.text || '';\n  const stripped = (typeof raw === 'string') ? raw.replace(/```json/g,'').replace(/```/g,'').trim() : JSON.stringify(raw);\n  // Intento 1: parseo directo\n  let parsed = null;\n  try { parsed = JSON.parse(stripped); } catch(e1) {}\n  // Intento 2: parseo con sanitización de control chars\n  if (!parsed) {\n    try { parsed = JSON.parse(sanitizeJson(stripped)); } catch(e2) {}\n  }\n  if (parsed) {\n    data = parsed;\n  } else {\n    // Fallback: usar items del nodo Merge directamente\n    data.items = buildFallbackItems();\n    data.resumen_noticias = '(Análisis automático no disponible — mostrando artículos sin clasificar)';\n  }\n} catch(e) {\n  data.items = buildFallbackItems();\n  data.resumen_noticias = '(Análisis automático no disponible)';\n}\n\nconst allItems   = data.items || [];\nconst fechaHoy       = new Date().toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });\nconst fechaSolo      = new Date().toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: 'long', year: 'numeric' });\nlet   totalAnalizadas = 0;\ntry { totalAnalizadas = $('Merge').all().length; } catch(e) {}\nif (!totalAnalizadas) totalAnalizadas = allItems.length;\n\n// ── 2. SEPARAR POR TIPO DE FUENTE ─────────────────────────────────────────────\n// itemsWeb: el upstream (Aplanar Resultados) ya garantiza que el artículo\n// menciona Adecoagro. No re-filtramos aquí para no perder artículos cuyo\n// resumen de IA no repite explícitamente el nombre de la empresa.\nconst itemsWeb      = allItems.filter(i =>\n  i.tipo_fuente === 'web' ||\n  (!i.tipo_fuente && i.categoria !== 'Social' && i.categoria !== 'Empresas Asociadas')\n);\nconst itemsSocial   = allItems.filter(i => i.tipo_fuente === 'social'       || i.es_red_social === true || i.categoria === 'Social');\nconst itemsEmpresas = allItems.filter(i =>\n  (i.tipo_fuente === 'web_asociada' || i.categoria === 'Empresas Asociadas') &&\n  i.empresa && !['desconocida', 'unknown', 'n/a', ''].includes((i.empresa||'').toLowerCase().trim())\n);\n\n// ── 3. ESTADÍSTICAS POR SECCIÓN ───────────────────────────────────────────────\nconst calcStats = (arr) => ({\n  pos: arr.filter(i => (i.sentimiento||'').toLowerCase().includes('pos')).length,\n  neu: arr.filter(i => (i.sentimiento||'').toLowerCase() === 'neutro' || !(i.sentimiento||'').toLowerCase().includes('pos') && !(i.sentimiento||'').toLowerCase().includes('neg')).length,\n  neg: arr.filter(i => (i.sentimiento||'').toLowerCase().includes('neg')).length,\n});\nconst stW = calcStats(itemsWeb);\nconst stS = calcStats(itemsSocial);\nconst stE = calcStats(itemsEmpresas);\n\n// Top fuentes de cobertura (reemplaza menciones por marca)\nconst fuenteCount = {};\nitemsWeb.forEach(i => {\n  const raw = i.medio || (i.url_real||i.url||'')\n    .replace(/https?:\\/\\/(www\\.)?/,'').split('/')[0].split('.')[0] || 'Otro';\n  const label = raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();\n  fuenteCount[label] = (fuenteCount[label]||0) + 1;\n});\nconst topFuentes = Object.entries(fuenteCount).sort((a,b)=>b[1]-a[1]).slice(0,6);\n\n// Conteo por red social\nconst detectRed = (url='') => {\n  const u = url.toLowerCase();\n  if (u.includes('instagram.com')) return 'Instagram';\n  if (u.includes('facebook.com'))  return 'Facebook';\n  if (u.includes('tiktok.com'))    return 'TikTok';\n  if (u.includes('youtube.com'))   return 'YouTube';\n  if (u.includes('threads.net'))   return 'Threads';\n  // Twitter/X: match preciso para evitar falsos positivos con dominios que contienen 'x.com'\n  if (u.includes('twitter.com') || /[\\/.]x\\.com[\\/]/.test(u) || u.includes('//x.com')) return 'Twitter/X';\n  if (u.includes('linkedin.com'))  return 'LinkedIn';\n  return 'Otros';\n};\nconst redesCount = {};\nitemsSocial.forEach(i => {\n  const red = detectRed(i.url_real || i.url || '');\n  redesCount[red] = (redesCount[red]||0) + 1;\n});\nconst redesEntries = Object.entries(redesCount).sort((a,b)=>b[1]-a[1]);\n\n// Agrupar empresas asociadas\nconst empresaMap = {};\nitemsEmpresas.forEach(i => {\n  const emp = i.empresa || 'Sin clasificar';\n  if (!empresaMap[emp]) empresaMap[emp] = [];\n  empresaMap[emp].push(i);\n});\nconst empresasOrdenadas = Object.entries(empresaMap).sort((a,b)=>b[1].length-a[1].length);\n\n\n// ── 4. HELPERS HTML ───────────────────────────────────────────────────────────\nconst sentKey = (s) => {\n  const sl = (s||'').toLowerCase();\n  return sl.includes('pos') ? 'positivo' : sl.includes('neg') ? 'negativo' : 'neutro';\n};\nconst badgeClass = (s) => sentKey(s) === 'positivo' ? 'bg-positivo' : sentKey(s) === 'negativo' ? 'bg-negativo' : 'bg-neutro';\n\n// ── 4b. EXTRA STATS HELPERS ──────────────────────────────────────────────────\nconst topFuentesHtml = topFuentes.map(([m,n]) =>\n  `<div class=\"stat-line\">${m} <span class=\"stat-val\">${n}</span></div>`).join('');\n\n// ── 4c. ITEM HTML HELPERS (new design) ────────────────────────────────────────\n\nconst noticiaHTML = (item, prefix='') => {\n  const url   = item.url_real || item.url || '#';\n  const medio = item.medio || (url !== '#' ? url.replace(/https?:\\/\\/(www\\.)?/,'').split('/')[0] : 'Fuente');\n  const fecha = item.fecha || 'Hoy';\n  const sk    = sentKey(item.sentimiento);\n  const bc    = sk === 'positivo' ? 'badge-pos' : sk === 'negativo' ? 'badge-neg' : 'badge-neu';\n  const lc    = sk === 'positivo' ? 'var(--pos)' : sk === 'negativo' ? 'var(--neg)' : 'var(--neu)';\n  const mentionsAdec = ((item.titulo||'')+' '+(item.resumen||'')).toLowerCase().includes('adecoagro');\n  return `<li class=\"article-item\" data-sentimiento=\"${sk}\" data-prefix=\"${prefix}\">\n    <div class=\"article-title\"><a href=\"${url}\" target=\"_blank\">${item.titulo || 'Sin título'}</a></div>\n    <div class=\"article-meta\">\n      <span class=\"article-time\">${fecha} · ${medio}</span>\n      <span class=\"badge ${bc}\">${item.sentimiento || 'Neutro'}</span>\n      ${mentionsAdec ? '<span class=\"badge badge-adec\">ADECOAGRO</span>' : ''}\n    </div>\n    <a href=\"${url}\" target=\"_blank\" class=\"article-link\" style=\"color:${lc}\">Leer noticia →</a>\n  </li>`;\n};\n\n// Ordenar por sentimiento: pos → neu → neg\nconst sortBySent = arr => [...arr].sort((a,b) => {\n  const r = s => sentKey(s) === 'positivo' ? 0 : sentKey(s) === 'negativo' ? 2 : 1;\n  return r(a.sentimiento) - r(b.sentimiento);\n});\n\nconst htmlWeb = sortBySent(itemsWeb).map(i => noticiaHTML(i,'web')).join('');\n\nconst colorRed = (red) => ({\n  'Instagram':'#E1306C','Facebook':'#1877F2','TikTok':'#69C9D0',\n  'YouTube':'#FF0000','Threads':'#101010','Twitter/X':'#1DA1F2',\n  'LinkedIn':'#0077B5','Otros':'#777'\n}[red]||'#777');\n\nconst htmlSocial = sortBySent(itemsSocial).map(item => {\n  const url = item.url_real || item.url || '#';\n  const red = detectRed(url);\n  const col = colorRed(red);\n  const sk  = sentKey(item.sentimiento);\n  const bc  = sk === 'positivo' ? 'badge-pos' : sk === 'negativo' ? 'badge-neg' : 'badge-neu';\n  return `<li class=\"article-item\" data-sentimiento=\"${sk}\" data-prefix=\"soc\" style=\"border-left-color:${col}\">\n    <div class=\"article-title\"><a href=\"${url}\" target=\"_blank\" style=\"color:${col}\">${item.titulo||'Sin título'}</a></div>\n    <div class=\"article-meta\">\n      <span class=\"article-time\">${item.fecha||'Hoy'}</span>\n      <span class=\"platform-tag\" style=\"background:${col}\">${red}</span>\n      <span class=\"badge ${bc}\">${item.sentimiento||'Neutro'}</span>\n    </div>\n    <a href=\"${url}\" target=\"_blank\" class=\"article-link\" style=\"color:${col}\">Ver en ${red} →</a>\n  </li>`;\n}).join('');\n\nconst getDomain = (url='') => (url||'').replace(/https?:\\/\\/(www\\.)?/,'').split('/')[0].toLowerCase();\n\nconst htmlEmpresas = empresasOrdenadas.map(([emp, empItems]) => {\n  const seenDomains = new Set();\n  empItems = empItems.filter(i => {\n    const d = getDomain(i.url_real || i.url);\n    if (!d || seenDomains.has(d)) return false;\n    seenDomains.add(d);\n    return true;\n  }).slice(0, 3);\n  const ep = empItems.filter(i=>sentKey(i.sentimiento)==='positivo').length;\n  const en = empItems.filter(i=>sentKey(i.sentimiento)==='negativo').length;\n  const dotColor = en > ep ? 'var(--neg)' : ep > en ? 'var(--pos)' : 'var(--neu)';\n  return `<details class=\"empresa-accordion\">\n    <summary>\n      <span style=\"width:8px;height:8px;border-radius:50%;background:${dotColor};display:inline-block;flex-shrink:0\"></span>\n      <span class=\"empresa-name\">${emp}</span>\n      <span class=\"empresa-badge\">${empItems.length} art.</span>\n    </summary>\n    <div style=\"padding:14px 18px\">\n      <ul class=\"article-list\">\n        ${sortBySent(empItems).map(i=>noticiaHTML(i,'emp')).join('')}\n      </ul>\n    </div>\n  </details>`;\n}).join('');\n\n// Arrays Chart.js\nconst arrSentWeb  = `[${stW.pos},${stW.neu},${stW.neg}]`;\nconst arrSentEmp  = `[${stE.pos},${stE.neu},${stE.neg}]`;\nconst arrSentSoc  = `[${stS.pos},${stS.neu},${stS.neg}]`;\nconst treemapData = JSON.stringify(redesEntries.map(([g,v])=>({ v, g })));\nconst treemapBgs  = JSON.stringify(redesEntries.map(([l]) => colorRed(l)));\nconst fuenteLabelsJson = JSON.stringify(topFuentes.map(([m])=>m));\nconst fuenteValsJson   = JSON.stringify(topFuentes.map(([,n])=>n));\n\n// ── 5. HTML COMPLETO — diseño Adecoagro dark (verde + lima) ──────────────────\nconst html = `<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n<title>Reporte Adecoagro — ${fechaSolo}</title>\n<script src=\"https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js\"><\\/script>\n<script src=\"https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0\"><\\/script>\n<script src=\"https://cdn.jsdelivr.net/npm/chartjs-chart-treemap@2.3.0/dist/chartjs-chart-treemap.min.js\"><\\/script>\n<link href=\"https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap\" rel=\"stylesheet\">\n<style>\n:root {\n  --bg:          #F5F7F5;\n  --surface:     #FFFFFF;\n  --surface-2:   #EDF2EE;\n  --surface-3:   #E2EBE3;\n  --border:      rgba(0,0,0,0.08);\n  --border-2:    rgba(0,0,0,0.14);\n  --gold:        #2A7A3B;\n  --gold-light:  #1F6030;\n  --gold-dim:    rgba(42,122,59,0.10);\n  --text:        #111C13;\n  --text-2:      #3D6647;\n  --text-3:      #7A9E80;\n  --pos:         #1E7E4E;\n  --pos-bg:      rgba(30,126,78,0.10);\n  --neu:         #8A6A10;\n  --neu-bg:      rgba(138,106,16,0.10);\n  --neg:         #C0392B;\n  --neg-bg:      rgba(192,57,43,0.10);\n  --tw:          #1D9BF0;\n  --ig:          #E1306C;\n  --fb:          #1877F2;\n}\n*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }\nhtml { scroll-behavior: smooth; }\nbody { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }\n.page-wrap { position: relative; z-index: 1; max-width: 980px; margin: 0 auto; padding: 0 24px 80px; }\n.hero { position: relative; padding: 64px 0 52px; overflow: hidden; animation: fadeDown 0.8s ease both; }\n.hero::before { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse 70% 80% at 50% -10%, rgba(42,122,59,0.06) 0%, transparent 70%); pointer-events: none; }\n.hero-grid-lines { position: absolute; inset: 0; background-image: linear-gradient(rgba(0,0,0,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.04) 1px, transparent 1px); background-size: 60px 60px; mask-image: linear-gradient(to bottom, transparent, rgba(0,0,0,0.4) 40%, rgba(0,0,0,0.4) 70%, transparent); }\n.hero-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 0.7em; letter-spacing: 0.2em; text-transform: uppercase; color: var(--gold); margin-bottom: 20px; display: flex; align-items: center; gap: 12px; }\n.hero-eyebrow::before { content: ''; display: block; width: 32px; height: 1px; background: var(--gold); }\n.hero-title { font-family: 'Playfair Display', Georgia, serif; font-size: clamp(2.2em, 5vw, 3.2em); font-weight: 700; line-height: 1.1; color: var(--text); letter-spacing: -0.02em; }\n.hero-title em { font-style: italic; color: var(--gold-light); }\n.hero-divider { height: 1px; background: linear-gradient(to right, var(--gold), transparent); margin: 28px 0; width: 60%; }\n.hero-meta { display: flex; align-items: flex-start; gap: 48px; flex-wrap: wrap; }\n.hero-date { font-family: 'IBM Plex Mono', monospace; font-size: 0.82em; color: var(--text-2); }\n.hero-date strong { display: block; font-size: 1.05em; color: var(--text); margin-top: 2px; }\n.hero-kpis { display: flex; gap: 36px; flex-wrap: wrap; }\n.kpi { text-align: center; }\n.kpi-value { font-family: 'IBM Plex Mono', monospace; font-size: 2em; font-weight: 600; color: var(--gold); line-height: 1; display: block; }\n.kpi-label { font-size: 0.72em; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 5px; }\n.kpi-sep { width: 1px; background: var(--border-2); align-self: stretch; }\n.nav-strip { position: sticky; top: 0; z-index: 100; background: rgba(245,247,245,0.92); backdrop-filter: blur(16px); border-bottom: 1px solid var(--border); padding: 0; margin: 0 -24px; animation: fadeDown 0.9s ease both; }\n.nav-inner { max-width: 980px; margin: 0 auto; padding: 0 24px; display: flex; gap: 0; }\n.nav-link { font-family: 'IBM Plex Mono', monospace; font-size: 0.72em; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; text-decoration: none; color: var(--text-3); padding: 14px 20px; border-bottom: 2px solid transparent; transition: all 0.2s; white-space: nowrap; }\n.nav-link:hover, .nav-link.active { color: var(--gold); border-bottom-color: var(--gold); }\n.section { margin-top: 56px; opacity: 0; transform: translateY(24px); animation: riseIn 0.6s ease forwards; }\n.section:nth-child(1) { animation-delay: 0.15s; }\n.section:nth-child(2) { animation-delay: 0.30s; }\n.section:nth-child(3) { animation-delay: 0.45s; }\n.section-header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 24px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }\n.section-icon { font-size: 1.1em; line-height: 1; }\n.section-title { font-family: 'Playfair Display', serif; font-size: 1.55em; font-weight: 600; color: var(--text); letter-spacing: -0.01em; }\n.section-count { font-family: 'IBM Plex Mono', monospace; font-size: 0.72em; color: var(--gold); background: var(--gold-dim); border: 1px solid rgba(208,249,33,0.25); padding: 2px 9px; border-radius: 3px; margin-left: auto; }\n.summary-card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--gold); border-radius: 2px 8px 8px 2px; padding: 20px 24px; font-size: 0.95em; line-height: 1.8; color: var(--text); font-style: normal; font-weight: 400; margin-bottom: 28px; }\n.dashboard-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 28px; }\n.chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }\n.chart-card-title { font-family: 'IBM Plex Mono', monospace; font-size: 0.65em; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-3); margin-bottom: 16px; }\n.chart-container { position: relative; height: 180px; }\n.treemap-container { position: relative; height: 180px; }\n.stats-grid { display: flex; gap: 32px; flex-wrap: wrap; margin-bottom: 28px; padding: 20px 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }\n.stat-group-title { font-family: 'IBM Plex Mono', monospace; font-size: 0.65em; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-3); margin-bottom: 12px; }\n.stat-line { font-family: 'IBM Plex Mono', monospace; font-size: 0.82em; color: var(--text-2); line-height: 2; display: flex; align-items: center; gap: 6px; }\n.stat-val { font-weight: 600; }\n.stat-val.pos { color: var(--pos); }\n.stat-val.neu { color: var(--neu); }\n.stat-val.neg { color: var(--neg); }\n.filter-bar { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }\n.filter-btn { font-family: 'IBM Plex Mono', monospace; font-size: 0.72em; font-weight: 500; letter-spacing: 0.05em; padding: 6px 16px; border-radius: 3px; border: 1px solid; cursor: pointer; background: transparent; transition: all 0.18s; }\n.filter-btn-all   { border-color: var(--text-3); color: var(--text-3); }\n.filter-btn-pos   { border-color: var(--pos); color: var(--pos); }\n.filter-btn-neu   { border-color: var(--neu); color: var(--neu); }\n.filter-btn-neg   { border-color: var(--neg); color: var(--neg); }\n.filter-btn-all.active, .filter-btn-all:hover   { background: var(--text-3); color: var(--bg); }\n.filter-btn-pos.active, .filter-btn-pos:hover   { background: var(--pos); color: var(--bg); }\n.filter-btn-neu.active, .filter-btn-neu:hover   { background: var(--neu); color: var(--bg); }\n.filter-btn-neg.active, .filter-btn-neg:hover   { background: var(--neg); color: var(--bg); }\ndetails.accordion { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 8px; }\ndetails.accordion > summary { padding: 16px 22px; cursor: pointer; background: var(--surface); font-weight: 500; font-size: 0.88em; color: var(--text-2); display: flex; justify-content: space-between; align-items: center; list-style: none; user-select: none; transition: background 0.2s; }\ndetails.accordion > summary::-webkit-details-marker { display: none; }\ndetails.accordion > summary:hover { background: var(--surface-2); color: var(--text); }\n.accordion-arrow { font-size: 0.7em; color: var(--text-3); transition: transform 0.25s; }\ndetails.accordion[open] > summary .accordion-arrow { transform: rotate(180deg); }\n.accordion-body { padding: 24px; }\ndetails.empresa-accordion { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; overflow: hidden; }\ndetails.empresa-accordion > summary { padding: 12px 16px; cursor: pointer; background: var(--surface); display: flex; align-items: center; gap: 10px; list-style: none; user-select: none; transition: background 0.15s; font-size: 0.88em; }\ndetails.empresa-accordion > summary::-webkit-details-marker { display: none; }\ndetails.empresa-accordion > summary:hover { background: var(--surface-2); }\n.empresa-name { font-weight: 600; flex: 1; text-transform: uppercase; letter-spacing: 0.04em; font-family: 'IBM Plex Mono', monospace; font-size: 0.9em; }\n.empresa-badge { font-family: 'IBM Plex Mono', monospace; font-size: 0.72em; background: var(--surface-3); border: 1px solid var(--border); color: var(--text-3); padding: 2px 10px; border-radius: 20px; }\nul.article-list { list-style: none; display: flex; flex-direction: column; gap: 12px; }\nli.article-item { padding: 16px 20px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--text-3); transition: border-left-color 0.2s, background 0.2s; }\nli.article-item:hover { background: var(--surface-2); }\nli.article-item[data-sentimiento=\"positivo\"] { border-left-color: var(--pos); }\nli.article-item[data-sentimiento=\"neutro\"]   { border-left-color: var(--neu); }\nli.article-item[data-sentimiento=\"negativo\"] { border-left-color: var(--neg); }\nli.article-item.oculto { display: none; }\n.article-title { font-weight: 500; font-size: 0.9em; line-height: 1.45; margin-bottom: 8px; }\n.article-title a { color: var(--text); text-decoration: none; transition: color 0.2s; }\n.article-title a:hover { color: var(--gold-light); }\n.article-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }\n.article-time { font-family: 'IBM Plex Mono', monospace; font-size: 0.72em; color: var(--text-3); }\n.badge { font-family: 'IBM Plex Mono', monospace; font-size: 0.65em; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 8px; border-radius: 2px; }\n.badge-pos  { background: var(--pos-bg); color: var(--pos); border: 1px solid rgba(63,184,130,0.3); }\n.badge-neu  { background: var(--neu-bg); color: var(--neu); border: 1px solid rgba(201,168,76,0.3); }\n.badge-neg  { background: var(--neg-bg); color: var(--neg); border: 1px solid rgba(224,85,85,0.3); }\n.badge-adec { background: var(--gold-dim); color: var(--gold); border: 1px solid rgba(208,249,33,0.25); font-size: 0.6em; }\n.platform-tag { font-family: 'IBM Plex Mono', monospace; font-size: 0.65em; font-weight: 600; letter-spacing: 0.05em; padding: 2px 8px; border-radius: 2px; color: #fff; }\n.article-link { font-family: 'IBM Plex Mono', monospace; font-size: 0.72em; text-decoration: none; transition: opacity 0.2s; display: inline-flex; align-items: center; gap: 4px; }\n.article-link:hover { opacity: 0.7; }\n@keyframes fadeDown { from { opacity:0; transform:translateY(-12px); } to { opacity:1; transform:translateY(0); } }\n@keyframes riseIn   { from { opacity:0; transform:translateY(24px); } to { opacity:1; transform:translateY(0); } }\n@media (max-width: 680px) { .dashboard-row { grid-template-columns: 1fr; } .hero-kpis { gap: 20px; } .kpi-sep { display: none; } .nav-link { padding: 12px; font-size: 0.68em; } }\n</style>\n</head>\n<body>\n<div class=\"page-wrap\">\n  <div class=\"hero\">\n    <div class=\"hero-grid-lines\"></div>\n    <div class=\"hero-eyebrow\">Inteligencia Mediática</div>\n    <h1 class=\"hero-title\">Reporte <em>Adecoagro</em></h1>\n    <div class=\"hero-divider\"></div>\n    <div class=\"hero-meta\">\n      <div class=\"hero-date\">\n        Período analizado\n        <strong>${fechaSolo}</strong>\n      </div>\n      <div class=\"hero-kpis\">\n        <div class=\"kpi\">\n          <span class=\"kpi-value\">${totalAnalizadas}</span>\n          <span class=\"kpi-label\">Fuentes analizadas</span>\n        </div>\n        <div class=\"kpi-sep\"></div>\n        <div class=\"kpi\">\n          <span class=\"kpi-value\">${itemsWeb.length + itemsSocial.length + itemsEmpresas.length}</span>\n          <span class=\"kpi-label\">Incluidas en informe</span>\n        </div>\n        <div class=\"kpi-sep\"></div>\n        <div class=\"kpi\">\n          <span class=\"kpi-value\">3</span>\n          <span class=\"kpi-label\">Secciones</span>\n        </div>\n      </div>\n    </div>\n  </div>\n</div>\n<nav class=\"nav-strip\">\n  <div class=\"nav-inner\">\n    <a href=\"#sec-noticias\" class=\"nav-link\">📰 Noticias (${itemsWeb.length})</a>\n    <a href=\"#sec-social\"   class=\"nav-link\">📱 Redes (${itemsSocial.length})</a>\n    <a href=\"#sec-empresas\" class=\"nav-link\">🏢 Empresas (${itemsEmpresas.length})</a>\n  </div>\n</nav>\n<div class=\"page-wrap\">\n\n  <section class=\"section\" id=\"sec-noticias\">\n    <div class=\"section-header\">\n      <span class=\"section-icon\">📰</span>\n      <h2 class=\"section-title\">Noticias Principales</h2>\n      <span class=\"section-count\">${itemsWeb.length} artículos</span>\n    </div>\n    <div class=\"summary-card\">${data.resumen_noticias || '(Resumen no disponible)'}</div>\n    <div class=\"dashboard-row\">\n      <div class=\"chart-card\">\n        <div class=\"chart-card-title\">Distribución de Sentimiento</div>\n        <div class=\"chart-container\"><canvas id=\"chartWebSent\"></canvas></div>\n      </div>\n      <div class=\"chart-card\">\n        <div class=\"chart-card-title\">Top Fuentes de Cobertura</div>\n        <div class=\"chart-container\"><canvas id=\"chartMarcas\"></canvas></div>\n      </div>\n    </div>\n    <div class=\"stats-grid\">\n      <div>\n        <div class=\"stat-group-title\">Sentimiento</div>\n        <div class=\"stat-line\">✅ Positivo <span class=\"stat-val pos\">${stW.pos}</span></div>\n        <div class=\"stat-line\">➖ Neutro <span class=\"stat-val neu\">${stW.neu}</span></div>\n        <div class=\"stat-line\">❌ Negativo <span class=\"stat-val neg\">${stW.neg}</span></div>\n      </div>\n      <div>\n        <div class=\"stat-group-title\">Medios con cobertura</div>\n        ${topFuentesHtml}\n      </div>\n    </div>\n    <details class=\"accordion\">\n      <summary>Ver los ${itemsWeb.length} artículos detectados <span class=\"accordion-arrow\">▼</span></summary>\n      <div class=\"accordion-body\">\n        <div class=\"filter-bar\">\n          <button class=\"filter-btn filter-btn-all active\" onclick=\"filtrar('web','all',this)\">Todos (${itemsWeb.length})</button>\n          <button class=\"filter-btn filter-btn-pos\" onclick=\"filtrar('web','positivo',this)\">Positivo (${stW.pos})</button>\n          <button class=\"filter-btn filter-btn-neu\" onclick=\"filtrar('web','neutro',this)\">Neutro (${stW.neu})</button>\n          <button class=\"filter-btn filter-btn-neg\" onclick=\"filtrar('web','negativo',this)\">Negativo (${stW.neg})</button>\n        </div>\n        <ul class=\"article-list\">${htmlWeb}</ul>\n      </div>\n    </details>\n  </section>\n\n  <section class=\"section\" id=\"sec-social\">\n    <div class=\"section-header\">\n      <span class=\"section-icon\">📱</span>\n      <h2 class=\"section-title\">Redes Sociales</h2>\n      <span class=\"section-count\">${itemsSocial.length} menciones</span>\n    </div>\n    <div class=\"summary-card\">${data.resumen_social || '(Resumen no disponible)'}</div>\n    <div class=\"dashboard-row\">\n      <div class=\"chart-card\">\n        <div class=\"chart-card-title\">Menciones por Red Social</div>\n        <div class=\"treemap-container\"><canvas id=\"chartTreemap\"></canvas></div>\n      </div>\n      <div class=\"chart-card\">\n        <div class=\"chart-card-title\">Sentimiento en Redes</div>\n        <div class=\"chart-container\"><canvas id=\"chartSocSent\"></canvas></div>\n      </div>\n    </div>\n    <div class=\"stats-grid\">\n      <div>\n        <div class=\"stat-group-title\">Sentimiento</div>\n        <div class=\"stat-line\">✅ Positivo <span class=\"stat-val pos\">${stS.pos}</span></div>\n        <div class=\"stat-line\">➖ Neutro <span class=\"stat-val neu\">${stS.neu}</span></div>\n        <div class=\"stat-line\">❌ Negativo <span class=\"stat-val neg\">${stS.neg}</span></div>\n      </div>\n    </div>\n    <details class=\"accordion\">\n      <summary>Ver las ${itemsSocial.length} menciones en redes <span class=\"accordion-arrow\">▼</span></summary>\n      <div class=\"accordion-body\">\n        <div class=\"filter-bar\">\n          <button class=\"filter-btn filter-btn-all active\" onclick=\"filtrar('soc','all',this)\">Todos (${itemsSocial.length})</button>\n          <button class=\"filter-btn filter-btn-pos\" onclick=\"filtrar('soc','positivo',this)\">Positivo (${stS.pos})</button>\n          <button class=\"filter-btn filter-btn-neu\" onclick=\"filtrar('soc','neutro',this)\">Neutro (${stS.neu})</button>\n          <button class=\"filter-btn filter-btn-neg\" onclick=\"filtrar('soc','negativo',this)\">Negativo (${stS.neg})</button>\n        </div>\n        <ul class=\"article-list\">${htmlSocial}</ul>\n      </div>\n    </details>\n  </section>\n\n  <section class=\"section\" id=\"sec-empresas\">\n    <div class=\"section-header\">\n      <span class=\"section-icon\">🏢</span>\n      <h2 class=\"section-title\">Empresas Asociadas</h2>\n      <span class=\"section-count\">${itemsEmpresas.length} artículos · ${empresasOrdenadas.length} empresas</span>\n    </div>\n    <div class=\"summary-card\">${data.resumen_empresas || '(Resumen no disponible)'}</div>\n    <div class=\"dashboard-row\">\n      <div class=\"chart-card\">\n        <div class=\"chart-card-title\">Distribución de Sentimiento</div>\n        <div class=\"chart-container\"><canvas id=\"chartEmpSent\"></canvas></div>\n      </div>\n      <div class=\"chart-card\">\n        <div class=\"chart-card-title\">Empresas con Cobertura</div>\n        <div class=\"chart-container\"><canvas id=\"chartEmpVol\"></canvas></div>\n      </div>\n    </div>\n    <div class=\"stats-grid\">\n      <div>\n        <div class=\"stat-group-title\">Sentimiento</div>\n        <div class=\"stat-line\">✅ Positivo <span class=\"stat-val pos\">${stE.pos}</span></div>\n        <div class=\"stat-line\">➖ Neutro <span class=\"stat-val neu\">${stE.neu}</span></div>\n        <div class=\"stat-line\">❌ Negativo <span class=\"stat-val neg\">${stE.neg}</span></div>\n      </div>\n    </div>\n    <details class=\"accordion\" open>\n      <summary>Ver detalle por empresa (${empresasOrdenadas.length} ${empresasOrdenadas.length === 1 ? 'empresa' : 'empresas'}) <span class=\"accordion-arrow\">▼</span></summary>\n      <div class=\"accordion-body\">${htmlEmpresas}</div>\n    </details>\n  </section>\n\n  <div style=\"margin-top:64px;padding-top:24px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px\">\n    <div style=\"font-family:'IBM Plex Mono',monospace;font-size:0.7em;color:var(--text-3);letter-spacing:0.06em\">ADECOAGRO — INTELIGENCIA MEDIÁTICA</div>\n    <div style=\"font-family:'IBM Plex Mono',monospace;font-size:0.7em;color:var(--text-3)\">Generado el ${fechaHoy}</div>\n  </div>\n</div>\n\n<script>\nChart.register(ChartDataLabels);\nChart.defaults.font.family = \"'IBM Plex Mono', monospace\";\nChart.defaults.color = '#5A8A6A';\nconst LIME = '#D0F921';\nconst POS  = '#3FB882';\nconst NEU  = '#C9A84C';\nconst NEG  = '#E05555';\nconst sentColors = [POS, NEU, NEG];\nconst donutOpts = () => ({\n  maintainAspectRatio: false, cutout: '65%',\n  plugins: {\n    legend: { position: 'right', labels: { color: '#5A8A6A', font:{size:11}, padding:14, boxWidth:10, boxHeight:10, usePointStyle:true } },\n    datalabels: { color: '#fff', font:{weight:'bold',size:12}, formatter: v => v > 0 ? v : '' }\n  }\n});\nnew Chart(document.getElementById('chartWebSent'), {\n  type:'doughnut',\n  data:{ labels:['Positivo','Neutro','Negativo'], datasets:[{ data:${arrSentWeb}, backgroundColor:sentColors, borderWidth:0, hoverOffset:6 }] },\n  options: donutOpts()\n});\nconst fuenteLabels = ${fuenteLabelsJson};\nconst fuenteVals   = ${fuenteValsJson};\nif (fuenteLabels.length > 0) {\n  new Chart(document.getElementById('chartMarcas'), {\n    type:'bar',\n    data:{ labels:fuenteLabels, datasets:[{ data:fuenteVals, backgroundColor:LIME, barPercentage:0.55 }] },\n    options:{ maintainAspectRatio:false, indexAxis:'y', plugins:{ legend:{display:false}, datalabels:{anchor:'end',align:'end',color:'#5A8A6A',font:{size:11}} }, scales:{ x:{display:false,grace:'20%'}, y:{grid:{display:false},ticks:{color:'#5A8A6A',font:{size:10}}} } }\n  });\n}\nconst treeData = ${treemapData};\nconst treeBgs  = ${treemapBgs};\nif (treeData.length > 0) {\n  new Chart(document.getElementById('chartTreemap'), {\n    type:'treemap',\n    data:{ datasets:[{ tree:treeData, key:'v', groups:['g'], backgroundColor: ctx => treeBgs[ctx.dataIndex]||'#555', labels:{ display:true, formatter: ctx => ctx.raw.g ? [ctx.raw.g, ctx.raw.v] : '', color:'#fff', font:[{size:13,weight:'bold'},{size:11}] } }] },\n    options:{ maintainAspectRatio:false, plugins:{ legend:{display:false}, datalabels:{display:false} } }\n  });\n}\nnew Chart(document.getElementById('chartSocSent'), {\n  type:'doughnut',\n  data:{ labels:['Positivo','Neutro','Negativo'], datasets:[{ data:${arrSentSoc}, backgroundColor:sentColors, borderWidth:0, hoverOffset:6 }] },\n  options: donutOpts()\n});\nif (document.getElementById('chartEmpSent')) {\n  new Chart(document.getElementById('chartEmpSent'), {\n    type:'doughnut',\n    data:{ labels:['Positivo','Neutro','Negativo'], datasets:[{ data:${arrSentEmp}, backgroundColor:sentColors, borderWidth:0, hoverOffset:6 }] },\n    options: donutOpts()\n  });\n}\nif (document.getElementById('chartEmpVol')) {\n  const empLabels = ${JSON.stringify(empresasOrdenadas.map(([e])=>e))};\n  const empVals   = ${JSON.stringify(empresasOrdenadas.map(([,a])=>a.length))};\n  new Chart(document.getElementById('chartEmpVol'), {\n    type:'bar',\n    data:{ labels:empLabels, datasets:[{ data:empVals, backgroundColor:LIME, barPercentage:0.5 }] },\n    options:{ maintainAspectRatio:false, indexAxis:'y', plugins:{ legend:{display:false}, datalabels:{anchor:'end',align:'end',color:'#5A8A6A',font:{size:11}} }, scales:{ x:{display:false,grace:'20%'}, y:{grid:{display:false},ticks:{color:'#5A8A6A',font:{size:11}}} } }\n  });\n}\nfunction filtrar(prefix, sentimiento, btn) {\n  document.querySelectorAll('[data-prefix=\"'+prefix+'\"]').forEach(el => {\n    el.classList.toggle('oculto', sentimiento !== 'all' && el.dataset.sentimiento !== sentimiento);\n  });\n  btn.closest('.filter-bar').querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));\n  btn.classList.add('active');\n}\nconst sections = document.querySelectorAll('section[id]');\nconst navLinks  = document.querySelectorAll('.nav-link');\nconst observer  = new IntersectionObserver(entries => {\n  entries.forEach(e => {\n    if (e.isIntersecting) {\n      navLinks.forEach(l => l.classList.remove('active'));\n      const a = document.querySelector('.nav-link[href=\"#'+e.target.id+'\"]');\n      if (a) a.classList.add('active');\n    }\n  });\n}, { rootMargin: '-30% 0px -60% 0px' });\nsections.forEach(s => observer.observe(s));\n<\\/script>\n</body>\n</html>`;\nconst binaryData = Buffer.from(html, 'utf8').toString('base64');\nreturn [{\n  json: { asunto: `Reporte Adecoagro: ${allItems.length} ítems (${itemsWeb.length} noticias · ${itemsSocial.length} social · ${itemsEmpresas.length} empresas)` },\n  binary: { data: { data: binaryData, mimeType: 'text/html', fileName: 'reporte_adecoagro.html' } }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        16,
+        464
+      ],
+      "id": "d2f07cee-8a6a-4555-acdb-230b14bdde54",
+      "name": "Generador HTML"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── DEDUPLICAR (dedup en memoria, cross-branch) ──────────────────────────────\n// Une los items de las 3 ramas (Noticias, Social, Empresas) y elimina duplicados.\n// Usa content_hash como clave principal; fallback a URL si no hay hash.\n// NUEVO: dedup por título normalizado — filtra la misma noticia en dos URLs distintas.\n// ─────────────────────────────────────────────────────────────────────────────\n\n// Normaliza un título para comparar: minúsculas, sin tildes, sin puntuación\nconst normTitle = (s) => (s||'').toLowerCase()\n  .normalize('NFD').replace(/[̀-ͯ]/g,'')\n  .replace(/[^\\w\\s]/g,'').replace(/\\s+/g,' ').trim();\n\n// Porcentaje de palabras (>3 chars) en común entre dos títulos\nconst titleSimilarity = (a, b) => {\n  const wa = new Set(normTitle(a).split(' ').filter(w => w.length > 3));\n  const wb = new Set(normTitle(b).split(' ').filter(w => w.length > 3));\n  if (!wa.size || !wb.size) return 0;\n  let common = 0;\n  for (const w of wa) if (wb.has(w)) common++;\n  return common / Math.min(wa.size, wb.size);\n};\n\nconst seen    = new Set();   // hashes/URLs vistos\nconst result  = [];          // items que pasan\nconst titles  = [];          // títulos ya incluidos (para comparar similitud)\n\nfor (const item of $input.all()) {\n  const url   = item.json.url || item.json.link || '';\n  const hash  = item.json.content_hash || item.json.hash || '';\n  const key   = hash || url;\n  const title = item.json.titulo || item.json.title || '';\n\n  // 1. Dedup por hash/URL\n  if (key && seen.has(key)) continue;\n\n  // 2. Dedup por similitud de título (umbral 0.75)\n  const esDuplicadoPorTitulo = titles.some(t => titleSimilarity(title, t) >= 0.75);\n  if (esDuplicadoPorTitulo) continue;\n\n  if (key) seen.add(key);\n  titles.push(title);\n  result.push(item);\n}\n\nreturn result;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        80
+      ],
+      "id": "bb9f7de1-1a41-466a-95a8-f941241461e0",
+      "name": "Deduplicar"
+    },
+    {
+      "parameters": {
+        "fileName": "=/home/node/output/reporte_adecoagro_{{ $now.format(\"yyyy-MM-dd_HH-mm\") }}.html",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.writeBinaryFile",
+      "typeVersion": 1,
+      "position": [
+        240,
+        464
+      ],
+      "id": "aee86b68-52b4-452b-9691-beb49c51d62c",
+      "name": "Guardar HTML"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT url_hash, content_hash FROM news_archive WHERE created_at >= NOW() - INTERVAL '60 days' AND DATE(created_at) < CURRENT_DATE",
+        "options": {
+          "queryBatching": "single"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1856,
+        80
+      ],
+      "id": "3c030fd1-87e2-459b-988e-a7b0744a3a09",
+      "name": "Consultar Postgres",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "JSb8QKJJ8a6xTzMo",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── FILTRAR NUEVAS (dedup contra Postgres, últimos 60 días) ──────────────────\n// Compara los items del Merge contra los hashes ya almacenados en la DB.\n// Solo pasan los items que NO están en la DB → evita re-procesar noticias viejas.\n// Input:  filas de Consultar Postgres (url_hash, content_hash)\n// Origen: $('Deduplicar').all() — los items ya deduplicados en memoria\n// ─────────────────────────────────────────────────────────────────────────────\n\n// 1. Construir set de hashes ya almacenados en Postgres\nconst hashesEnDB = new Set();\nfor (const row of $input.all()) {\n  if (row.json.url_hash)     hashesEnDB.add(row.json.url_hash);\n  if (row.json.content_hash) hashesEnDB.add(row.json.content_hash);\n}\n\n// 2. Filtrar: conservar solo items cuyo hash NO esté en la DB\nconst itemsDeduplicados = $('Deduplicar').all();\n\nreturn itemsDeduplicados.filter(item => {\n  const hash = item.json.content_hash || item.json.hash || '';\n  // Sin hash → dejar pasar (no podemos comparar, mejor procesar que perder)\n  if (!hash) return true;\n  return !hashesEnDB.has(hash);\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        80
+      ],
+      "id": "3cc5b6d9-5f1d-4500-a545-bb7ec8405472",
+      "name": "Filtrar Nuevas"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO news_archive (url_hash, content_hash, url, published_date)\nVALUES (\n  '{{ ($json.url || $json.link || \"\").replace(/[^a-zA-Z0-9]/g, \"\").slice(0, 64) }}',\n  '{{ ($json.content_hash || $json.hash || \"\").replace(/'/g, \"\") }}',\n  '{{ ($json.url || $json.link || \"\").replace(/'/g, \"\") }}',\n  CURRENT_DATE\n)\nON CONFLICT (url_hash) DO NOTHING",
+        "options": {
+          "queryBatching": "independently"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2000,
+        368
+      ],
+      "id": "4eb77600-5bc6-4394-9ab3-968321b32908",
+      "name": "Guardar en Postgres",
+      "credentials": {
+        "postgres": {
+          "id": "JSb8QKJJ8a6xTzMo",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── SPLIT QUERIES NEWS ─────────────────────────────────────────────────────────\n// 5 queries dirigidas. TODAS requieren Adecoagro explícito.\n// SIN comillas dobles en el texto — se interpolan en el JSON body de Serper\n// y las comillas dobles romperían el JSON.\n// ─────────────────────────────────────────────────────────────────────────────\n\nconst empresa = $('Config').item.json.empresa || 'Adecoagro';\n\nreturn [\n  // Ángulo 1: medios argentinos especializados (prioridad editorial)\n  { json: { query: empresa + ' site:infobae.com OR site:lanacion.com OR site:cronista.com OR site:ambito.com OR site:clarin.com OR site:agrofy.com.ar OR site:agrositio.com' } },\n  // Ángulo 2: noticias financieras / bolsa / inversores\n  { json: { query: empresa + ' acciones ADR inversor resultado dividendo bolsa argentina' } },\n  // Ángulo 3: operacional / producción / campo\n  { json: { query: empresa + ' cosecha produccion azucar leche campo expansion adquisicion' } },\n  // Ángulo 4: cobertura general reciente (captura menciones inesperadas)\n  { json: { query: empresa + ' noticias' } },\n  // Ángulo 5: medios internacionales / financieros globales\n  { json: { query: empresa + ' site:bloomberg.com OR site:reuters.com OR site:seekingalpha.com OR site:finance.yahoo.com OR site:businesswire.com' } },\n];\n"
+      },
+      "id": "split-queries-news-001",
+      "name": "Split Queries News",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        -480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lee los feeds RSS desde Config y genera un item por URL\nconst feedsStr = $('Config').item.json.rss_feeds || '';\nreturn feedsStr\n  .split(',')\n  .map(u => u.trim())\n  .filter(Boolean)\n  .map(url => ({ json: { feed_url: url } }));\n"
+      },
+      "id": "split-rss-feeds-001",
+      "name": "Split RSS Feeds",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        -832
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.feed_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; NewsBot/1.0)"
+            },
+            {
+              "name": "Accept",
+              "value": "application/rss+xml, application/xml, text/xml, */*"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 3
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "fetch-rss-feed-001",
+      "name": "Fetch RSS Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        416,
+        -832
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── NORMALIZAR RSS ─────────────────────────────────────────────────────────\n// Parsea XML de feeds RSS, filtra items que mencionan \"Adecoagro\",\n// normaliza al mismo formato que Aplanar Resultados (tipo_fuente: 'rss').\n// ──────────────────────────────────────────────────────────────────────────\n\nconst normalizar = (s) => (s||'').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');\n\nfunction extractTag(xml, tag) {\n  const re = new RegExp('<' + tag + '[^>]*>(?:<!\\\\[CDATA\\\\[)?([\\\\s\\\\S]*?)(?:\\\\]\\\\]>)?<\\\\/' + tag + '>', 'i');\n  const m = xml.match(re);\n  return m ? m[1].trim() : '';\n}\n\nfunction extractLink(xml) {\n  // <link>url</link> o <link href=\"url\"/>\n  let m = xml.match(/<link[^>]*>(?:<!\\[CDATA\\[)?(https?:\\/\\/[^\\]<\\s]+)(?:\\]\\]>)?<\\/link>/i);\n  if (m) return m[1].trim();\n  m = xml.match(/<link[^>]+href=\"(https?:\\/\\/[^\"]+)\"/i);\n  if (m) return m[1].trim();\n  return '';\n}\n\nfunction stripHtml(s) {\n  return (s||'').replace(/<[^>]+>/g, ' ').replace(/\\s+/g,' ').trim();\n}\n\nfunction hashStr(s) {\n  let h = 2166136261;\n  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }\n  return h.toString(16);\n}\n\nconst sitiosPrioritarios = ($('Config').item.json.sitios_prioritarios || '')\n  .split(',').map(d => d.trim()).filter(Boolean);\n\nconst results = [];\nconst seenUrls = new Set();\n\nfor (const item of $input.all()) {\n  const xmlText = item.json.data || item.json.body || '';\n  if (!xmlText) continue;\n\n  const itemBlocks  = xmlText.match(/<item[\\s\\S]*?<\\/item>/gi)   || [];\n  const entryBlocks = xmlText.match(/<entry[\\s\\S]*?<\\/entry>/gi) || [];\n\n  for (const block of [...itemBlocks, ...entryBlocks]) {\n    const title   = extractTag(block, 'title');\n    const link    = extractLink(block) || extractTag(block, 'link') || extractTag(block, 'id');\n    const desc    = stripHtml(extractTag(block, 'description') || extractTag(block, 'content') || extractTag(block, 'summary'));\n    const pubDate = extractTag(block, 'pubDate') || extractTag(block, 'published') || extractTag(block, 'updated') || 'Reciente';\n\n    if (!link || !link.startsWith('http')) continue;\n    if (seenUrls.has(link)) continue;\n\n    // FILTRO PRINCIPAL: debe mencionar \"adecoagro\"\n    const texto = normalizar(title + ' ' + desc);\n    if (!texto.includes('adecoagro')) continue;\n\n    seenUrls.add(link);\n    const esPrioritario = sitiosPrioritarios.some(d => link.includes(d));\n\n    results.push({ json: {\n      url:           link,\n      title:         title,\n      snippet:       desc.slice(0, 500),\n      source:        'RSS',\n      date:          pubDate,\n      tipo_fuente:   'rss',\n      es_prioritario: esPrioritario,\n      es_financial:  false,\n      content_hash:  'rss_' + hashStr(link),\n    }});\n  }\n}\n\nresults.sort((a, b) => (b.json.es_prioritario ? 1 : 0) - (a.json.es_prioritario ? 1 : 0));\nreturn results;\n"
+      },
+      "id": "normalizar-rss-001",
+      "name": "Normalizar RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        -832
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 🗞️ Noticias Principales\nSerper Google Search → filtra por mención explícita de **Adecoagro** en título/snippet",
+        "height": 145,
+        "width": 1240,
+        "color": 3
+      },
+      "id": "sticky-rama1",
+      "name": "Sticky Note Rama 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -576
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 📱 Redes Sociales\nSerper Social → filtra menciones de Adecoagro o ticker **AGRO**",
+        "height": 145,
+        "width": 560,
+        "color": 5
+      },
+      "id": "sticky-rama2",
+      "name": "Sticky Note Rama 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 🏢 Empresas Asociadas\nSerper por empresa → filtra noticias relevantes de cada empresa del portfolio",
+        "height": 145,
+        "width": 1180,
+        "color": 4
+      },
+      "id": "sticky-rama3",
+      "name": "Sticky Note Rama 3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        144,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 📡 RSS Feeds\nFeeds directos de medios argentinos → cobertura garantizada independiente del ranking de Google",
+        "height": 145,
+        "width": 580,
+        "color": 5
+      },
+      "id": "sticky-rama4",
+      "name": "Sticky Note Rama 4",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -896
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## ⚙️ Procesamiento Central\nDedup en memoria → PostgreSQL (60 días) → Filtrar nuevas → OpenAI → HTML",
+        "height": 660,
+        "width": 1180
+      },
+      "id": "sticky-proceso",
+      "name": "Sticky Note Procesamiento",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        -224
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Test workflow’": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Serper Search Social",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Split Empresas",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Split Queries News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Split RSS Feeds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aplanar Resultados": {
+      "main": [
+        [
+          {
+            "node": "Scraper Python",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scraper Python": {
+      "main": [
+        [
+          {
+            "node": "Parsear Scraper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear Scraper": {
+      "main": [
+        [
+          {
+            "node": "agregar tipo_fuente:web",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI": {
+      "main": [
+        [
+          {
+            "node": "Generador HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Social",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Serper Search News": {
+      "main": [
+        [
+          {
+            "node": "Aplanar Resultados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Serper Search Social": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Social": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Deduplicar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "OpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "agregar tipo_fuente:web": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aplanar Resultados1": {
+      "main": [
+        [
+          {
+            "node": "Scraper Python1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scraper Python1": {
+      "main": [
+        [
+          {
+            "node": "Parsear Scraper1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear Scraper1": {
+      "main": [
+        [
+          {
+            "node": "Juntar Resultados Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Serper Search Emp Asoc": {
+      "main": [
+        [
+          {
+            "node": "Aplanar Resultados1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Empresas": {
+      "main": [
+        [
+          {
+            "node": "Serper Search Emp Asoc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Juntar Resultados Loop": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Generador HTML": {
+      "main": [
+        [
+          {
+            "node": "Guardar HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicar": {
+      "main": [
+        [
+          {
+            "node": "Consultar Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar Postgres": {
+      "main": [
+        [
+          {
+            "node": "Filtrar Nuevas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar Nuevas": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Guardar en Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Queries News": {
+      "main": [
+        [
+          {
+            "node": "Serper Search News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split RSS Feeds": {
+      "main": [
+        [
+          {
+            "node": "Fetch RSS Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch RSS Feed": {
+      "main": [
+        [
+          {
+            "node": "Normalizar RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "7e49c57a-012c-4373-823c-1d82619d4bb3",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2743583a1a0b7ceedb5a6c1ff46327506d61094a5feb7cfe8c615869d5774267"
+  },
+  "id": "BcTAvfeN20F3d5Ai",
+  "tags": []
+}
