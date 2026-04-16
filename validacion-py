@@ -10,7 +10,8 @@ from datetime import datetime
 OUTPUT_PATH = "./output"
 REPORT_NAME = f"auditoria_newsletter_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
 # El criterio que usará el script para buscar en el texto
-KEYWORDS_RELEVANCIA = ["adecoagro", "adeco", "agro", "ia", "automatización"] 
+_empresa = os.getenv("EMPRESA_OBJETIVO", "adecoagro").lower()
+KEYWORDS_RELEVANCIA = [_empresa, "agro", "ia", "automatización"]
 
 async def check_url_status(session, url):
     """Verifica si la URL está viva, con bypass para sitios que bloquean bots."""
