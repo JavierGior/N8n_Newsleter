@@ -28,7 +28,7 @@ Serper API (búsqueda)
 
 | Componente | Tecnología |
 |---|---|
-| Orquestación | [n8n](https://n8n.io) |
+| Orquestación | <a href="https://n8n.io" target="_blank">n8n</a> |
 | IA / Análisis | OpenAI API |
 | Búsqueda web | Serper API |
 | Base de datos | PostgreSQL + pgvector |
@@ -39,7 +39,7 @@ Serper API (búsqueda)
 
 ## Requisitos
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- <a href="https://www.docker.com/products/docker-desktop/" target="_blank">Docker Desktop</a>
 - Claves de API: OpenAI y Serper
 
 ---
@@ -59,7 +59,7 @@ cd N8n_Newsleter
 cp .env.example .env
 ```
 
-Completar `.env` con las claves reales. Ver [.env.example](.env.example) para referencia.
+Completar `.env` con las claves reales. Ver <a href=".env.example" target="_blank">.env.example</a> para referencia.
 
 ### 3. Levantar los servicios
 
@@ -67,11 +67,11 @@ Completar `.env` con las claves reales. Ver [.env.example](.env.example) para re
 docker compose up -d
 ```
 
-Esto inicia PostgreSQL y n8n en [http://localhost:5678](http://localhost:5678).
+Esto inicia PostgreSQL y n8n en <a href="http://localhost:5678" target="_blank">http://localhost:5678</a>.
 
 ### 4. Importar el workflow
 
-1. Abrí n8n en [http://localhost:5678](http://localhost:5678)
+1. Abrí n8n en <a href="http://localhost:5678" target="_blank">http://localhost:5678</a>
 2. Ir a **Workflows → Import from file**
 3. Seleccionar `Gemini_n8n_Newsleter.json`
 4. Configurar las credenciales de OpenAI, Serper y PostgreSQL en n8n
@@ -115,4 +115,4 @@ N8n_Newsleter/
 
 ## ✒️ Autor
 
-**Javier Giordano** — [Perfil de LinkedIn](https://www.linkedin.com/in/javier-giordano/) · [javiergiordano.com.ar](https://www.javiergiordano.com.ar/)
+**Javier Giordano** — <a href="https://www.linkedin.com/in/javier-giordano/" target="_blank">Perfil de LinkedIn</a> · <a href="https://www.javiergiordano.com.ar/" target="_blank">javiergiordano.com.ar</a>
