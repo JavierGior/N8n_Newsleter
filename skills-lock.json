@@ -9,17 +9,17 @@
     "n8n-code-javascript": {
       "source": "czlonkowski/n8n-skills",
       "sourceType": "github",
-      "computedHash": "7e3317c734cbcc861fef6a54ec0c254867b2d2bf6bea131b49611e438ccf88fb"
+      "computedHash": "e0b265f8a54726eb33fdd83f3e319e5d8e45393520f3d0ad26ff9f5979c41514"
     },
     "n8n-code-python": {
       "source": "czlonkowski/n8n-skills",
       "sourceType": "github",
-      "computedHash": "921f3f5a74ac016b41b72bfa0a13d884e85309d2cfd9c4bcf7fc3eade70a0f08"
+      "computedHash": "609e42181553f2e7281c1287b0ee72dc10a4472af8329bc08d5b68f6bf4808aa"
     },
     "n8n-expression-syntax": {
       "source": "czlonkowski/n8n-skills",
       "sourceType": "github",
-      "computedHash": "3e28711cdf2a53dae95f3b79b7f329304f68c7bb97c1778badf1f30ff6d897af"
+      "computedHash": "c9f3fa73a93ae89ccb0f456606f12b43b159999169389979f528f171277b9965"
     },
     "n8n-mcp-tools-expert": {
       "source": "czlonkowski/n8n-skills",
@@ -29,17 +29,17 @@
     "n8n-node-configuration": {
       "source": "czlonkowski/n8n-skills",
       "sourceType": "github",
-      "computedHash": "153df341eeb695d7174f0427c5c64025ca8e098afa579c2557333d75b673e181"
+      "computedHash": "31499d133a0e9cb0c09079d5b2ca9212626cc3463756c4b0239182cc4e43ed92"
     },
     "n8n-validation-expert": {
       "source": "czlonkowski/n8n-skills",
       "sourceType": "github",
-      "computedHash": "35a29eed70df68e28954f1739a398f836554cef488241e77b056ef406c3ae7da"
+      "computedHash": "d3e53f3740b9b423e7f370bb8a5121024c8c77b9b32eb99561be1e2b41a8462c"
     },
     "n8n-workflow-patterns": {
       "source": "czlonkowski/n8n-skills",
       "sourceType": "github",
-      "computedHash": "6ffd6cdfcaa51dd0c5e6b1867fcaf862583bb98a8ad66a63c1b0c7ea599770ef"
+      "computedHash": "62de9e5fda2ac9f2967626dfc7caec7775ceb8e001371cebbf210c380383412f"
     },
     "project-workflow-analysis-blueprint-generator": {
       "source": "github/awesome-copilot",
