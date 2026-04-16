@@ -1,6 +1,6 @@
 # N8n Newsletter — Automated AI News Digest
 
-Pipeline automatizado de generación de newsletters de noticias usando **n8n**, **OpenAI**, **Serper** y **PostgreSQL con pgvector**. El sistema busca, analiza y deduplica noticias relevantes para Adecoagro, generando reportes HTML listos para distribución.
+Pipeline automatizado de generación de newsletters de noticias usando **n8n**, **OpenAI**, **Serper** y **PostgreSQL con pgvector**. El sistema busca, analiza y deduplica noticias relevantes para La Empresa Objetivo, generando reportes HTML listos para distribución.
 
 ---
 
@@ -150,3 +150,9 @@ git push
 - El archivo `.env` nunca se commitea al repositorio
 - Las credenciales en los workflows exportados de n8n son referencias internas (IDs), no valores reales
 - Ver `.gitignore` para la lista completa de exclusiones
+
+---
+
+## ✒️ Autor
+
+**Javier Giordano** — [Perfil de LinkedIn](https://www.linkedin.com/in/javier-giordano/) · [javiergiordano.com.ar](https://www.javiergiordano.com.ar/)
