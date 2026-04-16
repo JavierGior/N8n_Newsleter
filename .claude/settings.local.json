@@ -5,7 +5,10 @@
       "Bash(npx skills *)",
       "Bash(gh auth *)",
       "Bash(winget list *)",
-      "Bash(gh --version)"
+      "Bash(gh --version)",
+      "Bash(gh api *)",
+      "Bash(curl -s https://raw.githubusercontent.com/JavierGior/NewsLetter_researcher/main/README.md)",
+      "Bash(curl -s https://raw.githubusercontent.com/JavierGior/NewsLetter_researcher/master/README.md)"
     ]
   }
 }
